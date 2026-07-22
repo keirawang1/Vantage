@@ -1,0 +1,103 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId} == Firebase Auth UID
+    // Fields:
+    //   - balance: number (required, >= 0)
+    //   - holdings: list (required, <= 500)
+    //   - transactions: list (required, <= 2000)
+    //   - profile: map (required) - {name, email, pic}
+    //   - watchlists: list (required, <= 50) - [{id, name, symbols}]
+    //   - prefs: map (required) - toolbar/layout/order/pins
+    //       homeRange, filter, sort, sortDir, changeDisplay, viewMode,
+    //       theme, activeWatchlist: string
+    //       pinnedSymbols: list of strings
+    //       customOrders: map of string -> list of strings
+    //       detailRanges: map of string -> string
+    //   - setupComplete: bool (optional)
+    //   - updatedAt: timestamp (optional)
+    //
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidProfile(p) {
+      return p is map &&
+        p.keys().hasOnly(['name', 'email', 'pic']) &&
+        p.keys().hasAll(['name', 'email', 'pic']) &&
+        p.name is string && p.name.size() > 0 && p.name.size() <= 80 &&
+        p.email is string && p.email.size() <= 160 &&
+        p.pic is string && p.pic.size() <= 500000 &&
+        (p.pic.size() == 0 || p.pic.matches('^https://.*') || p.pic.matches('^data:image/.*'));
+    }
+
+    function isValidPrefs(p) {
+      return p is map &&
+        p.keys().hasOnly([
+          'homeRange', 'filter', 'sort', 'sortDir', 'changeDisplay',
+          'viewMode', 'theme', 'activeWatchlist', 'pinnedSymbols',
+          'customOrders', 'detailRanges'
+        ]) &&
+        p.keys().hasAll([
+          'homeRange', 'filter', 'sort', 'sortDir', 'changeDisplay',
+          'viewMode', 'theme', 'activeWatchlist', 'pinnedSymbols',
+          'customOrders', 'detailRanges'
+        ]) &&
+        p.homeRange is string && p.homeRange.size() <= 8 &&
+        p.filter is string && p.filter.size() <= 24 &&
+        p.sort is string && p.sort.size() <= 24 &&
+        p.sortDir is string && p.sortDir.size() <= 8 &&
+        p.changeDisplay is string && p.changeDisplay.size() <= 16 &&
+        p.viewMode is string && p.viewMode.size() <= 8 &&
+        p.theme is string && p.theme.size() <= 8 &&
+        p.activeWatchlist is string && p.activeWatchlist.size() <= 64 &&
+        p.pinnedSymbols is list && p.pinnedSymbols.size() <= 500 &&
+        p.customOrders is map && p.customOrders.keys().size() <= 50 &&
+        p.detailRanges is map && p.detailRanges.keys().size() <= 500;
+    }
+
+    function isValidUserState(data) {
+      return data.keys().hasOnly([
+          'balance', 'holdings', 'transactions', 'profile',
+          'watchlists', 'prefs', 'setupComplete', 'updatedAt'
+        ]) &&
+        data.keys().hasAll([
+          'balance', 'holdings', 'transactions', 'profile',
+          'watchlists', 'prefs'
+        ]) &&
+        data.balance is number &&
+        data.balance >= 0 && data.balance <= 1000000000000 &&
+        data.holdings is list && data.holdings.size() <= 500 &&
+        data.transactions is list && data.transactions.size() <= 2000 &&
+        data.watchlists is list && data.watchlists.size() <= 50 &&
+        isValidProfile(data.profile) &&
+        isValidPrefs(data.prefs) &&
+        (!('setupComplete' in data) || data.setupComplete is bool) &&
+        (!('updatedAt' in data) || data.updatedAt == request.time);
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUserState(request.resource.data);
+      allow update: if isOwner(userId) && isValidUserState(request.resource.data);
+      allow delete: if isOwner(userId);
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

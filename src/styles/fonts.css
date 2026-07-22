@@ -1,0 +1,8 @@
+body {
+  font-family: 'Geist', ui-sans-serif, system-ui, sans-serif;
+}
+
+.font-mono,
+[class*="font-mono"] {
+  font-family: 'Geist Mono', ui-monospace, monospace;
+}
