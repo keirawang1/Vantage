@@ -20,20 +20,37 @@ import {
 function requireEnv(name: keyof ImportMetaEnv): string {
   const v = import.meta.env[name];
   if (typeof v !== "string" || !v.trim()) {
-    throw new Error(`Missing ${name}. Copy .env.example to .env and fill in Firebase web config.`);
+    throw new Error(`Missing ${name}. Set it in .env / .env.production or Vercel env.`);
   }
   return v.trim();
 }
 
-const firebaseConfig = {
-  apiKey: requireEnv("VITE_FIREBASE_API_KEY"),
-  authDomain: requireEnv("VITE_FIREBASE_AUTH_DOMAIN"),
-  projectId: requireEnv("VITE_FIREBASE_PROJECT_ID"),
-  storageBucket: requireEnv("VITE_FIREBASE_STORAGE_BUCKET"),
-  messagingSenderId: requireEnv("VITE_FIREBASE_MESSAGING_SENDER_ID"),
-  appId: requireEnv("VITE_FIREBASE_APP_ID"),
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID?.trim() || undefined,
+let firebaseConfig: {
+  apiKey: string;
+  authDomain: string;
+  projectId: string;
+  storageBucket: string;
+  messagingSenderId: string;
+  appId: string;
+  measurementId?: string;
 };
+
+try {
+  firebaseConfig = {
+    apiKey: requireEnv("VITE_FIREBASE_API_KEY"),
+    authDomain: requireEnv("VITE_FIREBASE_AUTH_DOMAIN"),
+    projectId: requireEnv("VITE_FIREBASE_PROJECT_ID"),
+    storageBucket: requireEnv("VITE_FIREBASE_STORAGE_BUCKET"),
+    messagingSenderId: requireEnv("VITE_FIREBASE_MESSAGING_SENDER_ID"),
+    appId: requireEnv("VITE_FIREBASE_APP_ID"),
+    measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID?.trim() || undefined,
+  };
+} catch (err) {
+  const msg = err instanceof Error ? err.message : String(err);
+  document.body.innerHTML =
+    `<pre style="font:14px/1.4 system-ui;padding:24px;white-space:pre-wrap">Vantage failed to start.\n\n${msg}</pre>`;
+  throw err;
+}
 
 const app = initializeApp(firebaseConfig);
 export { app };

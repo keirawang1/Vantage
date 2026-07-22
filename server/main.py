@@ -16,16 +16,23 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Vantage yfinance API")
 _DEFAULT_CORS = (
-    "http://localhost:5173,http://127.0.0.1:5173,https://vantage.vercel.app"
+    "http://localhost:5173,http://127.0.0.1:5173,"
+    "https://vantage-orcin-rho.vercel.app,"
+    "https://vantage-keirawang1.vercel.app,"
+    "https://vantage-g2jl.vercel.app,"
+    "https://vantage-g2jl-keirawang1.vercel.app"
 )
 _CORS_ORIGINS = list(dict.fromkeys(
     [o.strip() for o in os.environ.get("VANTAGE_CORS_ORIGINS", _DEFAULT_CORS).split(",") if o.strip()]
-    + ["https://vantage.vercel.app"]
+    + [
+        "https://vantage-orcin-rho.vercel.app",
+        "https://vantage-keirawang1.vercel.app",
+    ]
 ))
 # Vercel production + preview deployments for this project
 _CORS_ORIGIN_REGEX = os.environ.get(
     "VANTAGE_CORS_ORIGIN_REGEX",
-    r"https://vantage(-[a-z0-9-]+)*\.vercel\.app",
+    r"https://(vantage|vantage-g2jl)(-[a-z0-9-]+)*\.vercel\.app",
 ).strip() or None
 app.add_middleware(
     CORSMiddleware,
