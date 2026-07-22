@@ -1,6 +1,15 @@
 node_modules/
 dist/
 server/.venv/
+server/.yf_cache.json
+server/.yf_cache.tmp
 __pycache__/
 *.pyc
 .DS_Store
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+serviceAccount*.json

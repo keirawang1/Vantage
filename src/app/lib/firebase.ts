@@ -17,14 +17,22 @@ import {
   setDoc,
 } from "firebase/firestore";
 
+function requireEnv(name: keyof ImportMetaEnv): string {
+  const v = import.meta.env[name];
+  if (typeof v !== "string" || !v.trim()) {
+    throw new Error(`Missing ${name}. Copy .env.example to .env and fill in Firebase web config.`);
+  }
+  return v.trim();
+}
+
 const firebaseConfig = {
-  apiKey: "AIzaSyCgS_BEkwcebJkZqgv7wFpHlQjsENjOXvc",
-  authDomain: "vantage-16b9c.firebaseapp.com",
-  projectId: "vantage-16b9c",
-  storageBucket: "vantage-16b9c.firebasestorage.app",
-  messagingSenderId: "85954504081",
-  appId: "1:85954504081:web:c4612d9ff3e391c4856630",
-  measurementId: "G-K9REL8GFGT",
+  apiKey: requireEnv("VITE_FIREBASE_API_KEY"),
+  authDomain: requireEnv("VITE_FIREBASE_AUTH_DOMAIN"),
+  projectId: requireEnv("VITE_FIREBASE_PROJECT_ID"),
+  storageBucket: requireEnv("VITE_FIREBASE_STORAGE_BUCKET"),
+  messagingSenderId: requireEnv("VITE_FIREBASE_MESSAGING_SENDER_ID"),
+  appId: requireEnv("VITE_FIREBASE_APP_ID"),
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID?.trim() || undefined,
 };
 
 const app = initializeApp(firebaseConfig);

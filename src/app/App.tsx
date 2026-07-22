@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import {
   STOCKS_META, ALL_SYMBOLS, getHistory, fetchQuotes, fetchHistory, ensureQuotes, mergeQuotes,
+  lastQuotesFreshness,
   prefetchSparklines, searchStocks, alignHistoryToPrice, invalidateHistoryRange, clearHistoryCache,
   quoteChangeForRange,
   type StockMeta, type SearchResult, type TimeRange,
@@ -2067,8 +2068,13 @@ function StockDetailView({
 
 // ─── MarketStrip ───────────────────────────────────────────────────────────────
 
-function MarketStrip({ stocks, status }: { stocks: StockMeta[]; status: "loading" | "live" | "error" }) {
+function MarketStrip({ stocks, status }: { stocks: StockMeta[]; status: "loading" | "live" | "stale" | "error" }) {
   const indices = stocks.filter(s => ["SPY", "QQQ", "GLD"].includes(s.symbol));
+  const statusLabel =
+    status === "loading" ? "Loading…"
+    : status === "error" ? "yfinance offline"
+    : status === "stale" ? "delayed (cached)"
+    : "yfinance";
   return (
     <div
       className="flex items-center gap-5 px-5 py-1.5 border-b overflow-x-auto"
@@ -2083,7 +2089,7 @@ function MarketStrip({ stocks, status }: { stocks: StockMeta[]; status: "loading
       ))}
       <div className="ml-auto text-[10px] font-mono flex-shrink-0" style={{ color: "var(--v-ink-dim)" }}>
         {new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })} ET ·{" "}
-        {status === "loading" ? "Loading…" : status === "error" ? "yfinance offline" : "yfinance"}
+        {statusLabel}
       </div>
     </div>
   );
@@ -2969,7 +2975,9 @@ export default function App() {
   const [needsNameSetup,  setNeedsNameSetup] = useState(false);
   const [setupComplete,   setSetupComplete]  = useState(false);
   const [stocks,          setStocks]         = useState<StockMeta[]>(STOCKS_META);
-  const [dataStatus,      setDataStatus]     = useState<"loading" | "live" | "error">("loading");
+  const [dataStatus,      setDataStatus]     = useState<"loading" | "live" | "stale" | "error">(
+    STOCKS_META.some(s => s.price > 0) ? "stale" : "loading",
+  );
   const [sparkEpoch,      setSparkEpoch]     = useState(0);
   const [tradeDialog,     setTradeDialog]    = useState<{ symbol: string; mode: "buy" | "sell" } | null>(null);
 
@@ -2983,29 +2991,42 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     clearHistoryCache();
+    const applyQuotes = (live: StockMeta[]) => {
+      setStocks([...live]);
+      setDataStatus(lastQuotesFreshness === "live" ? "live" : live.some(s => s.price > 0) ? "stale" : "error");
+    };
     (async () => {
       try {
         const live = await fetchQuotes();
         if (cancelled) return;
-        setStocks([...live]);
-        setDataStatus("live");
+        applyQuotes(live);
         await prefetchSparklines(ALL_SYMBOLS, homeRange);
         if (!cancelled) setSparkEpoch(e => e + 1);
       } catch {
-        if (!cancelled) setDataStatus("error");
+        if (cancelled) return;
+        // Keep last-good (local / in-memory) prices instead of fake placeholders
+        if (STOCKS_META.some(s => s.price > 0)) {
+          setStocks([...STOCKS_META]);
+          setDataStatus("stale");
+        } else {
+          setDataStatus("error");
+        }
       }
     })();
     const id = window.setInterval(() => {
       fetchQuotes()
         .then(async live => {
           if (cancelled) return;
-          setStocks([...live]);
-          setDataStatus("live");
+          applyQuotes(live);
           invalidateHistoryRange("1D");
           await prefetchSparklines(live.map(s => s.symbol), "1D");
           if (!cancelled) setSparkEpoch(e => e + 1);
         })
-        .catch(() => { if (!cancelled) setDataStatus("error"); });
+        .catch(() => {
+          if (cancelled) return;
+          if (STOCKS_META.some(s => s.price > 0)) setDataStatus("stale");
+          else setDataStatus("error");
+        });
     }, 60_000);
     return () => { cancelled = true; window.clearInterval(id); };
   }, []);

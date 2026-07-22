@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
 import math
+import os
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from typing import Any
 
 import yfinance as yf
@@ -11,12 +15,31 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Vantage yfinance API")
+_CORS_ORIGINS = [
+    o.strip()
+    for o in os.environ.get(
+        "VANTAGE_CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",")
+    if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
+    allow_origins=_CORS_ORIGINS,
+    allow_methods=["GET"],
     allow_headers=["*"],
 )
+
+MAX_SYMBOLS = 40
+MAX_SEARCH_LEN = 64
+_SYMBOL_RE = re.compile(r"^[A-Za-z0-9.^_-]{1,15}$")
+
+
+def _normalize_symbol(symbol: str) -> str:
+    s = symbol.strip().upper()
+    if not _SYMBOL_RE.match(s):
+        raise HTTPException(400, "invalid symbol")
+    return s
 
 RANGE_MAP = {
     "1D":  {"period": "1d",  "interval": "5m"},
@@ -33,9 +56,11 @@ RANGE_MAP = {
 }
 
 # TTL cache: Yahoo aggressively rate-limits, so serve cached data and fall
-# back to stale entries when yfinance errors out.
+# back to stale entries when yfinance errors out. Persisted to disk so
+# restarts still have last-good quotes instead of zeros / client fakes.
 _CACHE: dict[str, tuple[float, Any]] = {}
 _CACHE_LOCK = threading.Lock()
+_CACHE_PATH = Path(__file__).resolve().parent / ".yf_cache.json"
 
 QUOTE_TTL = 60.0
 HISTORY_TTL = {
@@ -44,6 +69,37 @@ HISTORY_TTL = {
     "ALL": 3600.0,
 }
 SEARCH_TTL = 300.0
+
+
+def _cache_load() -> None:
+    if not _CACHE_PATH.exists():
+        return
+    try:
+        raw = json.loads(_CACHE_PATH.read_text())
+        if not isinstance(raw, dict):
+            return
+        loaded: dict[str, tuple[float, Any]] = {}
+        for k, entry in raw.items():
+            if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+                continue
+            ts, value = entry
+            if isinstance(ts, (int, float)) and value is not None:
+                loaded[str(k)] = (float(ts), value)
+        with _CACHE_LOCK:
+            _CACHE.update(loaded)
+    except Exception:
+        pass
+
+
+def _cache_save() -> None:
+    with _CACHE_LOCK:
+        snapshot = {k: [ts, v] for k, (ts, v) in _CACHE.items()}
+    try:
+        tmp = _CACHE_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(snapshot, default=str))
+        os.replace(tmp, _CACHE_PATH)
+    except Exception:
+        pass
 
 
 def _cache_get(key: str, ttl: float) -> tuple[Any, bool]:
@@ -59,7 +115,10 @@ def _cache_get(key: str, ttl: float) -> tuple[Any, bool]:
 def _cache_put(key: str, value: Any) -> None:
     with _CACHE_LOCK:
         _CACHE[key] = (time.time(), value)
+    _cache_save()
 
+
+_cache_load()
 
 SECTORS = {
     "AAPL": "Technology",
@@ -186,6 +245,8 @@ def _quote_one(symbol: str) -> dict[str, Any]:
         "dayLow": pick("dayLow", "regularMarketDayLow") or 0.0,
         "eps": pick("trailingEps", "epsTrailingTwelveMonths"),
         "dividendYield": div,
+        "stale": False,
+        "asOf": time.time(),
     }
 
 
@@ -208,45 +269,65 @@ def _empty_quote(sym: str, err: str | None = None) -> dict[str, Any]:
         "dayLow": 0,
         "eps": None,
         "dividendYield": None,
+        "stale": True,
     }
     if err:
         q["error"] = err
     return q
 
 
+def _stale_quote(sym: str, err: str | None = None) -> dict[str, Any]:
+    """Prefer last-good cached quote over empty zeros when Yahoo fails."""
+    with _CACHE_LOCK:
+        entry = _CACHE.get(f"q:{sym}")
+    if entry is not None:
+        ts, value = entry
+        if isinstance(value, dict) and value.get("price"):
+            out = dict(value)
+            out["stale"] = True
+            out["asOf"] = ts
+            if err:
+                out["error"] = err
+            return out
+    return _empty_quote(sym, err)
+
+
 @app.get("/api/quotes")
 def quotes(symbols: str = Query(..., description="Comma-separated tickers")):
-    syms = [s.strip().upper() for s in symbols.split(",") if s.strip()]
-    if not syms:
+    raw = [s for s in symbols.split(",") if s.strip()]
+    if not raw:
         raise HTTPException(400, "symbols required")
+    if len(raw) > MAX_SYMBOLS:
+        raise HTTPException(400, f"max {MAX_SYMBOLS} symbols")
+    syms = [_normalize_symbol(s) for s in raw]
 
     by_sym: dict[str, dict[str, Any]] = {}
     to_fetch: list[str] = []
     for s in syms:
         cached, fresh = _cache_get(f"q:{s}", QUOTE_TTL)
-        if cached is not None and fresh:
-            by_sym[s] = cached
+        if cached is not None and fresh and isinstance(cached, dict) and cached.get("price"):
+            q = dict(cached)
+            q["stale"] = False
+            by_sym[s] = q
         else:
             to_fetch.append(s)
 
+    # Keep concurrency low — Yahoo rate-limits hard on parallel .info hits
     if to_fetch:
-        with ThreadPoolExecutor(max_workers=min(8, len(to_fetch))) as pool:
+        with ThreadPoolExecutor(max_workers=min(3, len(to_fetch))) as pool:
             futs = {pool.submit(_quote_one, s): s for s in to_fetch}
             for fut in as_completed(futs):
                 sym = futs[fut]
                 q: dict[str, Any] | None = None
-                err: str | None = None
                 try:
                     q = fut.result()
-                except Exception as e:
-                    err = str(e)
+                except Exception:
+                    q = None
                 if q is not None and q.get("price"):
                     _cache_put(f"q:{sym}", q)
                     by_sym[sym] = q
                 else:
-                    # Fetch failed or returned no price: fall back to stale cache
-                    stale, _ = _cache_get(f"q:{sym}", QUOTE_TTL)
-                    by_sym[sym] = stale if stale is not None else (q or _empty_quote(sym, err))
+                    by_sym[sym] = _stale_quote(sym)
 
     return {"quotes": [by_sym[s] for s in syms]}
 
@@ -256,29 +337,35 @@ def history(symbol: str, range: str = Query("1D")):
     key = range.upper()
     cfg = RANGE_MAP.get(key)
     if not cfg:
-        raise HTTPException(400, f"invalid range: {range}")
+        raise HTTPException(400, "invalid range")
 
-    cache_key = f"h:{symbol.upper()}:{key}"
+    display = _normalize_symbol(symbol)
+    cache_key = f"h:{display}:{key}"
     cached, fresh = _cache_get(cache_key, HISTORY_TTL.get(key, 600.0))
     if cached is not None and fresh:
-        return cached
+        out = dict(cached) if isinstance(cached, dict) else cached
+        if isinstance(out, dict):
+            out["stale"] = False
+        return out
 
-    err: str | None = None
+    failed = False
     df = None
-    display = symbol.strip().upper()
     t = yf.Ticker(_yf_symbol(display))
     try:
         # Unadjusted closes so chart aligns with quote price
         df = t.history(period=cfg["period"], interval=cfg["interval"], auto_adjust=False)
-    except Exception as e:
-        err = str(e)
+    except Exception:
+        failed = True
 
     if df is None or df.empty:
         if cached is not None:
-            return cached  # stale beats nothing when Yahoo is rate-limiting
-        if err:
-            raise HTTPException(502, f"yfinance error: {err}")
-        return {"points": []}
+            out = dict(cached) if isinstance(cached, dict) else {"points": []}
+            if isinstance(out, dict):
+                out["stale"] = True
+            return out  # stale beats nothing when Yahoo is rate-limiting
+        if failed:
+            raise HTTPException(502, "upstream quote error")
+        return {"points": [], "stale": True}
 
     points: list[dict[str, float]] = []
     for ts, row in df.iterrows():
@@ -295,17 +382,19 @@ def history(symbol: str, range: str = Query("1D")):
     elif live is not None and not points:
         points = [{"t": int(time.time() * 1000), "p": live}]
 
-    result = {"points": points, "lastPrice": live}
+    result = {"points": points, "lastPrice": live, "stale": False}
     if points:
         _cache_put(cache_key, result)
     return result
 
 
 @app.get("/api/search")
-def search(q: str = Query(..., min_length=1)):
+def search(q: str = Query(..., min_length=1, max_length=MAX_SEARCH_LEN)):
     query = q.strip()
     if not query:
         return {"results": []}
+    if len(query) > MAX_SEARCH_LEN:
+        raise HTTPException(400, "query too long")
 
     cache_key = f"s:{query.lower()}"
     cached, fresh = _cache_get(cache_key, SEARCH_TTL)
@@ -315,10 +404,13 @@ def search(q: str = Query(..., min_length=1)):
     try:
         s = yf.Search(query, max_results=12, news_count=0)
         quotes = s.quotes or []
-    except Exception as e:
+    except Exception:
         if cached is not None:
-            return cached
-        raise HTTPException(502, f"search error: {e}") from e
+            out = dict(cached) if isinstance(cached, dict) else cached
+            if isinstance(out, dict):
+                out["stale"] = True
+            return out
+        raise HTTPException(502, "upstream search error")
 
     results = []
     seen: set[str] = set()
@@ -353,4 +445,5 @@ def health():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    port = int(os.environ.get("PORT", "8000"))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=os.environ.get("RENDER") is None)
