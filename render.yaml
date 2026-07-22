@@ -13,4 +13,6 @@ services:
         value: "3.12.8"
       # Comma-separated browser origins allowed to call the API (include your frontend URL).
       - key: VANTAGE_CORS_ORIGINS
-        value: "http://localhost:5173,http://127.0.0.1:5173"
+        value: "http://localhost:5173,http://127.0.0.1:5173,https://vantage.vercel.app"
+      - key: VANTAGE_CORS_ORIGIN_REGEX
+        value: "https://vantage(-[a-z0-9-]+)*\\.vercel\\.app"

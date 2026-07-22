@@ -15,17 +15,22 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Vantage yfinance API")
-_CORS_ORIGINS = [
-    o.strip()
-    for o in os.environ.get(
-        "VANTAGE_CORS_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173",
-    ).split(",")
-    if o.strip()
-]
+_DEFAULT_CORS = (
+    "http://localhost:5173,http://127.0.0.1:5173,https://vantage.vercel.app"
+)
+_CORS_ORIGINS = list(dict.fromkeys(
+    [o.strip() for o in os.environ.get("VANTAGE_CORS_ORIGINS", _DEFAULT_CORS).split(",") if o.strip()]
+    + ["https://vantage.vercel.app"]
+))
+# Vercel production + preview deployments for this project
+_CORS_ORIGIN_REGEX = os.environ.get(
+    "VANTAGE_CORS_ORIGIN_REGEX",
+    r"https://vantage(-[a-z0-9-]+)*\.vercel\.app",
+).strip() or None
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_CORS_ORIGINS,
+    allow_origin_regex=_CORS_ORIGIN_REGEX,
     allow_methods=["GET"],
     allow_headers=["*"],
 )
