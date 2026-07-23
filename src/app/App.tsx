@@ -3,7 +3,7 @@ import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from "recharts";
 import {
-  Search, Sun, Moon, Plus, ChevronLeft, Filter, ArrowUpDown,
+  Search, Sun, Moon, Plus, ChevronLeft, ChevronRight, ChevronDown, Filter, ArrowUpDown,
   X, Check, TrendingUp, TrendingDown, Star, BarChart2, Minus,
   MoreHorizontal, LayoutGrid, List, Landmark, Wallet, Settings,
   Eye, EyeOff, User as UserIcon,
@@ -104,7 +104,7 @@ const fmtWhen = (t: number) =>
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
 type AppPage = "home" | "portfolio" | "bank" | "account";
-type FilterMode = "all" | "gainers" | "losers" | "movers";
+type FilterMode = "all" | "gainers" | "losers" | "movers" | "owned";
 type SortMode   = "manual" | "change" | "changeAmt" | "price" | "cap" | "volume" | "symbol" | "name";
 type SortDir    = "desc" | "asc";
 type ChangeDisplay = "percent" | "amount";
@@ -153,7 +153,7 @@ const DEFAULT_PROFILE: Profile = {
 };
 
 const TIME_RANGES: TimeRange[] = ["1D", "1W", "1M", "3M", "6M", "YTD", "1Y", "2Y", "5Y", "10Y", "ALL"];
-const FILTER_MODES: FilterMode[] = ["all", "gainers", "losers", "movers"];
+const FILTER_MODES: FilterMode[] = ["all", "gainers", "losers", "movers", "owned"];
 const SORT_MODES: SortMode[] = ["manual", "change", "changeAmt", "price", "cap", "volume", "symbol", "name"];
 
 function asWatchlists(raw: unknown): Watchlist[] | null {
@@ -549,7 +549,7 @@ function SearchDropdown({
         sector: hit.sector || "—",
         price: 0, change: 0, changePercent: 0, volume: 0, avgVolume: 0,
         marketCap: 0, pe: null, high52w: 0, low52w: 0, open: 0, dayHigh: 0, dayLow: 0,
-        eps: null, dividendYield: null,
+        eps: null, dividendYield: null, afterHours: null, preMarket: null,
       } satisfies StockMeta;
     });
   }, [remote, stocks]);
@@ -807,15 +807,15 @@ function StockCard({
 /** Shared column layout so header labels + row cells stay aligned */
 const LR = {
   pad: "px-4",
-  symbol: "w-32 sm:w-36 flex-shrink-0 min-w-0 text-left",
-  chart:  "w-36 sm:w-44 flex-shrink-0 min-w-0 text-left hidden sm:block",
+  symbol: "w-44 sm:w-52 flex-shrink-0 overflow-hidden text-left",
+  chart:  "w-36 sm:w-44 flex-shrink-0 min-w-0 text-left",
   price:  "w-[4.75rem] flex-shrink-0 text-left tabular-nums",
   change: "w-[4.5rem] flex-shrink-0 text-left",
-  volume: "w-[4.5rem] flex-shrink-0 text-left tabular-nums hidden md:block",
+  volume: "w-[4.5rem] flex-shrink-0 text-left tabular-nums",
   cap:    "w-[4.75rem] flex-shrink-0 text-left tabular-nums",
-  open:   "w-[4.75rem] flex-shrink-0 text-left tabular-nums hidden lg:block",
-  high:   "w-[4.75rem] flex-shrink-0 text-left tabular-nums hidden lg:block",
-  low:    "w-[4.75rem] flex-shrink-0 text-left tabular-nums hidden xl:block",
+  open:   "w-[4.75rem] flex-shrink-0 text-left tabular-nums",
+  high:   "w-[4.75rem] flex-shrink-0 text-left tabular-nums",
+  low:    "w-[4.75rem] flex-shrink-0 text-left tabular-nums",
   menu:   "w-6 flex-shrink-0",
 } as const;
 
@@ -832,11 +832,12 @@ function ListCols(props: {
 }) {
   const { symbol, chart, price, change, volume, cap, open, high, low } = props;
   return (
-    <div className="flex items-center flex-1 min-w-0 overflow-hidden">
-      <div className="flex items-center gap-3 flex-shrink-0">
-        <div className={LR.symbol}>{symbol}</div>
-        <div className={LR.chart}>{chart}</div>
-      </div>
+    <div className="flex items-center flex-1 min-w-[52rem]">
+      <div className={LR.symbol}>{symbol}</div>
+
+      <div className="w-6 sm:w-10 flex-shrink-0" aria-hidden />
+
+      <div className={LR.chart}>{chart}</div>
 
       <div className="w-8 sm:w-12 flex-shrink-0" aria-hidden />
 
@@ -865,19 +866,52 @@ function ListCols(props: {
   );
 }
 
-function ListHeader() {
+function ListHeader({
+  sort, sortDir, changeDisplay, onColumnSort,
+}: {
+  sort: SortMode;
+  sortDir: SortDir;
+  changeDisplay: ChangeDisplay;
+  onColumnSort: (s: SortMode) => void;
+}) {
+  const changeSort: SortMode = changeDisplay === "amount" ? "changeAmt" : "change";
+
+  const SortLabel = ({
+    mode, children,
+  }: {
+    mode: SortMode;
+    children: React.ReactNode;
+  }) => {
+    const active = sort === mode;
+    return (
+      <button
+        type="button"
+        onClick={() => onColumnSort(mode)}
+        className="inline-flex items-center gap-0.5 text-left text-[9px] font-mono uppercase tracking-widest"
+        style={{ color: "var(--v-ink-dim)" }}
+      >
+        {children}
+        {active && (
+          <span className="normal-case tracking-normal opacity-70" aria-hidden>
+            {sortDir === "asc" ? "↑" : "↓"}
+          </span>
+        )}
+      </button>
+    );
+  };
+
   return (
     <div
-      className={`flex items-center gap-3 ${LR.pad} pb-1.5 mb-1 text-[9px] font-mono uppercase tracking-widest`}
+      className={`flex items-center gap-3 ${LR.pad} pb-1.5 mb-1 text-[9px] font-mono uppercase tracking-widest min-w-[52rem]`}
       style={{ color: "var(--v-ink-dim)" }}
     >
       <ListCols
-        symbol="Symbol"
+        symbol={<SortLabel mode="symbol">Symbol</SortLabel>}
         chart="Chart"
-        price="Price"
-        change="Change"
-        volume="Volume"
-        cap="Mkt Cap"
+        price={<SortLabel mode="price">Price</SortLabel>}
+        change={<SortLabel mode={changeSort}>Change</SortLabel>}
+        volume={<SortLabel mode="volume">Volume</SortLabel>}
+        cap={<SortLabel mode="cap">Mkt Cap</SortLabel>}
         open="Open"
         high="High"
         low="Low"
@@ -909,7 +943,7 @@ function StockRow({
 
   return (
     <div
-      className={`group flex items-center gap-3 ${LR.pad} py-3 rounded-xl border transition-all duration-150`}
+      className={`group flex items-center gap-3 ${LR.pad} py-3 rounded-xl border transition-all duration-150 min-w-[52rem]`}
       style={{
         background:  "var(--v-panel)",
         borderColor: isDragOver ? "var(--v-ink-soft)" : isPinned ? "rgba(52,211,153,0.35)" : "var(--v-line)",
@@ -998,6 +1032,206 @@ function StockRow({
   );
 }
 
+// ─── Holding list (portfolio) ──────────────────────────────────────────────────
+
+const HR = {
+  pad: "px-4",
+  symbol: "w-44 sm:w-52 flex-shrink-0 overflow-hidden text-left",
+  price:  "w-[4.75rem] flex-shrink-0 text-left tabular-nums",
+  change: "w-[4.5rem] flex-shrink-0 text-left",
+  shares: "w-[4.5rem] flex-shrink-0 text-left tabular-nums",
+  avg:    "w-[4.75rem] flex-shrink-0 text-left tabular-nums",
+  profit: "w-[5rem] flex-shrink-0 text-left tabular-nums",
+  value:  "w-[5rem] flex-shrink-0 text-left tabular-nums",
+  menu:   "w-6 flex-shrink-0",
+} as const;
+
+function HoldingCols(props: {
+  symbol: React.ReactNode;
+  price: React.ReactNode;
+  change: React.ReactNode;
+  shares: React.ReactNode;
+  avg: React.ReactNode;
+  profit: React.ReactNode;
+  value: React.ReactNode;
+}) {
+  const { symbol, price, change, shares, avg, profit, value } = props;
+  return (
+    <div className="flex items-center flex-1 min-w-[42rem]">
+      <div className={HR.symbol}>{symbol}</div>
+      <div className="w-6 sm:w-10 flex-shrink-0" aria-hidden />
+      <div className="flex items-center gap-3 flex-shrink-0">
+        <div className={HR.price}>{price}</div>
+        <div className={HR.change}>{change}</div>
+      </div>
+      <div className="w-5 sm:w-8 flex-shrink-0" aria-hidden />
+      <div className="flex items-center gap-5 flex-shrink-0">
+        <div className={HR.shares}>{shares}</div>
+        <div className={HR.avg}>{avg}</div>
+        <div className={HR.profit}>{profit}</div>
+        <div className={HR.value}>{value}</div>
+      </div>
+      <div className="flex-1 min-w-[0.5rem]" aria-hidden />
+    </div>
+  );
+}
+
+function HoldingListHeader({
+  sort, sortDir, changeDisplay, onColumnSort,
+}: {
+  sort: SortMode;
+  sortDir: SortDir;
+  changeDisplay: ChangeDisplay;
+  onColumnSort: (s: SortMode) => void;
+}) {
+  const changeSort: SortMode = changeDisplay === "amount" ? "changeAmt" : "change";
+
+  const SortLabel = ({ mode, children }: { mode: SortMode; children: React.ReactNode }) => {
+    const active = sort === mode;
+    return (
+      <button
+        type="button"
+        onClick={() => onColumnSort(mode)}
+        className="inline-flex items-center gap-0.5 text-left text-[9px] font-mono uppercase tracking-widest"
+        style={{ color: "var(--v-ink-dim)" }}
+      >
+        {children}
+        {active && (
+          <span className="normal-case tracking-normal opacity-70" aria-hidden>
+            {sortDir === "asc" ? "↑" : "↓"}
+          </span>
+        )}
+      </button>
+    );
+  };
+
+  return (
+    <div
+      className={`flex items-center gap-3 ${HR.pad} pb-1.5 mb-1 text-[9px] font-mono uppercase tracking-widest min-w-[42rem]`}
+      style={{ color: "var(--v-ink-dim)" }}
+    >
+      <HoldingCols
+        symbol={<SortLabel mode="symbol">Symbol</SortLabel>}
+        price={<SortLabel mode="price">Price</SortLabel>}
+        change={<SortLabel mode={changeSort}>Change</SortLabel>}
+        shares="Shares"
+        avg="Avg"
+        profit="Profit"
+        value="Value"
+      />
+      <span className={HR.menu} aria-hidden />
+    </div>
+  );
+}
+
+function HoldingRow({
+  stock, holding, range, watchlists, isPinned,
+  onSelect, onToggleWatchlist, onTogglePin,
+  refreshKey = 0, changeDisplay = "percent",
+}: {
+  stock: StockMeta;
+  holding: Holding;
+  range: TimeRange;
+  watchlists: Watchlist[];
+  isPinned: boolean;
+  refreshKey?: number;
+  changeDisplay?: ChangeDisplay;
+  onSelect: () => void;
+  onToggleWatchlist: (watchlistId: string, symbol: string) => void;
+  onTogglePin: (symbol: string) => void;
+}) {
+  const delta = useRangeChange(stock.symbol, range, stock, refreshKey);
+  const isGain = delta.changePercent >= 0;
+  const [menuOpen, setMenuOpen] = useState(false);
+  const value = stock.price * holding.shares;
+  const profit = (stock.price - holding.avgCost) * holding.shares;
+  const profitPct = holding.avgCost > 0 ? ((stock.price - holding.avgCost) / holding.avgCost) * 100 : 0;
+
+  return (
+    <div
+      className={`group flex items-center gap-3 ${HR.pad} py-3 rounded-xl border transition-all duration-150 min-w-[42rem]`}
+      style={{
+        background:  "var(--v-panel)",
+        borderColor: isPinned ? "rgba(52,211,153,0.35)" : "var(--v-line)",
+        cursor: "pointer",
+      }}
+      onClick={onSelect}
+      onMouseEnter={e => { if (!isPinned) e.currentTarget.style.borderColor = "var(--v-line-strong)"; }}
+      onMouseLeave={e => { if (!isPinned) e.currentTarget.style.borderColor = "var(--v-line)"; }}
+    >
+      <HoldingCols
+        symbol={(
+          <>
+            <div className="font-mono text-[13px] font-semibold tracking-wider flex items-center gap-1.5 truncate" style={{ color: "var(--v-ink)" }}>
+              {stock.symbol}
+              {isPinned && <Star size={8} fill={G} style={{ color: G, flexShrink: 0 }} />}
+            </div>
+            <div className="text-[11px] truncate" style={{ color: "var(--v-ink-dim)" }}>{stock.name}</div>
+          </>
+        )}
+        price={(
+          <span className="font-mono text-[14px] font-semibold truncate" style={{ color: "var(--v-ink)" }}>
+            {fmt$(stock.price)}
+          </span>
+        )}
+        change={(
+          <span
+            className="flex w-fit items-center text-[11px] font-mono font-medium px-1.5 py-0.5 rounded-md truncate max-w-full"
+            style={{ color: isGain ? G : R, background: isGain ? "rgba(52,211,153,0.1)" : "rgba(248,113,130,0.1)" }}
+          >
+            {changeDisplay === "amount" ? fmtChangeAmt(delta.change) : fmtPct(delta.changePercent)}
+          </span>
+        )}
+        shares={(
+          <span className="font-mono text-[11px] truncate" style={{ color: "var(--v-ink-dim)" }}>
+            {holding.shares.toLocaleString("en-US", { maximumFractionDigits: 4 })}
+          </span>
+        )}
+        avg={(
+          <span className="font-mono text-[11px] truncate" style={{ color: "var(--v-ink-dim)" }}>
+            {fmt$(holding.avgCost)}
+          </span>
+        )}
+        profit={(
+          <span
+            className="font-mono text-[11px] truncate"
+            style={{ color: profit >= 0 ? G : R }}
+          >
+            {changeDisplay === "amount"
+              ? `${profit >= 0 ? "+" : ""}${fmt$(profit)}`
+              : fmtPct(profitPct)}
+          </span>
+        )}
+        value={(
+          <span className="font-mono text-[11px] truncate" style={{ color: "var(--v-ink)" }}>
+            {fmt$(value)}
+          </span>
+        )}
+      />
+
+      <div className={`relative ${HR.menu}`} onClick={e => e.stopPropagation()}>
+        <button
+          className="w-6 h-6 rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+          style={{ background: "var(--v-line-strong)" }}
+          onClick={() => setMenuOpen(v => !v)}
+        >
+          <MoreHorizontal size={12} style={{ color: "var(--v-ink-soft)" }} />
+        </button>
+        {menuOpen && (
+          <CardMenu
+            symbol={stock.symbol}
+            watchlists={watchlists}
+            isPinned={isPinned}
+            onTogglePin={() => onTogglePin(stock.symbol)}
+            onToggleWatchlist={id => onToggleWatchlist(id, stock.symbol)}
+            onClose={() => setMenuOpen(false)}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── WatchlistSidebar ──────────────────────────────────────────────────────────
 
 function WatchlistItemMenu({
@@ -1042,7 +1276,7 @@ function WatchlistItemMenu({
 }
 
 function WatchlistSidebar({
-  watchlists, activeId, onSelect, onCreate, onDelete, onRename, onReorder,
+  watchlists, activeId, onSelect, onCreate, onDelete, onRename, onReorder, open,
 }: {
   watchlists: Watchlist[];
   activeId: string;
@@ -1051,6 +1285,7 @@ function WatchlistSidebar({
   onDelete: (id: string) => void;
   onRename: (id: string, name: string) => void;
   onReorder: (fromId: string, toId: string) => void;
+  open: boolean;
 }) {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
@@ -1089,10 +1324,13 @@ function WatchlistSidebar({
 
   return (
     <aside
-      className="hidden md:flex flex-col flex-shrink-0 w-52 border-r overflow-y-auto"
+      className={`flex flex-col flex-shrink-0 border-r overflow-hidden transition-[width,opacity] duration-200 ease-out ${
+        open ? "w-52 opacity-100" : "w-0 opacity-0 border-r-0 pointer-events-none"
+      }`}
       style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}
+      aria-hidden={!open}
     >
-      <div className="px-3 pt-4 pb-4 flex-1">
+      <div className="px-3 pt-4 pb-4 flex-1 overflow-y-auto w-52">
         <div className="flex items-center justify-between px-2 mb-1.5">
           <div className="text-[9px] font-mono font-semibold tracking-[0.15em] uppercase" style={{ color: "var(--v-ink-dim)" }}>
             Watchlists
@@ -1262,11 +1500,89 @@ const RANGE_TIER: Record<TimeRange, string> = {
   "ALL": "",
 };
 
+/** Ranges that are hidden at some breakpoints (shown via ▾ overflow menu) */
+const RANGE_OVERFLOW: TimeRange[] = ["1W", "1M", "6M", "YTD", "2Y", "5Y", "10Y"];
+
+function RangePicker({
+  range, setRange, ranges = RANGES,
+}: {
+  range: TimeRange;
+  setRange: (r: TimeRange) => void;
+  ranges?: TimeRange[];
+}) {
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!moreOpen) return;
+    const h = (e: MouseEvent) => {
+      if (moreRef.current && !moreRef.current.contains(e.target as Node)) setMoreOpen(false);
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [moreOpen]);
+
+  const overflowActive = RANGE_OVERFLOW.includes(range);
+
+  return (
+    <div className="flex items-center rounded-lg p-0.5 flex-shrink-0" style={{ background: "var(--v-line)" }}>
+      {ranges.map(r => (
+        <button
+          key={r}
+          onClick={() => setRange(r)}
+          className={`px-3 py-1 rounded-md text-[10px] sm:text-[11px] font-mono font-medium transition-all flex-shrink-0 ${range === r ? "" : RANGE_TIER[r]}`}
+          style={{
+            background: range === r ? "var(--v-ink)"   : "transparent",
+            color:      range === r ? "var(--v-panel)" : "var(--v-ink-soft)",
+          }}
+        >
+          {r}
+        </button>
+      ))}
+      <div ref={moreRef} className="relative flex-shrink-0 self-stretch flex items-center 2xl:hidden">
+        <button
+          type="button"
+          onClick={() => setMoreOpen(v => !v)}
+          className="h-full px-1.5 rounded-md flex items-center justify-center transition-all"
+          style={{
+            background: overflowActive || moreOpen ? "var(--v-ink)" : "transparent",
+            color:      overflowActive || moreOpen ? "var(--v-panel)" : "var(--v-ink-soft)",
+          }}
+          title="More ranges"
+          aria-label="More ranges"
+          aria-expanded={moreOpen}
+        >
+          <ChevronDown size={12} />
+        </button>
+        {moreOpen && (
+          <div
+            className="absolute right-0 top-9 z-50 min-w-[5.5rem] rounded-xl border py-1.5 shadow-2xl"
+            style={{ background: "var(--v-panel)", borderColor: "var(--v-line-strong)" }}
+          >
+            {RANGE_OVERFLOW.map(r => (
+              <button
+                key={r}
+                className="w-full text-left px-3 py-1.5 text-[11px] font-mono flex items-center gap-2 hover:bg-white/5 transition-colors"
+                style={{ color: r === range ? "var(--v-ink)" : "var(--v-ink-soft)" }}
+                onClick={() => { setRange(r); setMoreOpen(false); }}
+              >
+                {r === range ? <Check size={10} color={G} /> : <span className="w-[10px]" />}
+                {r}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const FILTER_OPTS: { value: FilterMode; label: string }[] = [
   { value: "all",     label: "All"        },
   { value: "gainers", label: "Gainers"    },
   { value: "losers",  label: "Losers"     },
   { value: "movers",  label: "Top Movers" },
+  { value: "owned",   label: "Owned"      },
 ];
 
 const SORT_OPTS: { value: SortMode; label: string }[] = [
@@ -1318,7 +1634,7 @@ function DropdownMenu<T extends string>({
       </button>
       {open && (
         <div
-          className="absolute right-0 top-9 z-50 min-w-[148px] rounded-xl border py-1.5 shadow-2xl"
+          className="absolute right-0 top-9 z-[100] min-w-[148px] rounded-xl border py-1.5 shadow-2xl"
           style={{ background: "var(--v-panel)", borderColor: "var(--v-line-strong)" }}
         >
           {options.map(o => (
@@ -1370,13 +1686,13 @@ function Toolbar({
 
   return (
     <div
-      className="flex items-center gap-2.5 px-4 py-2 border-b sticky top-0 z-10 backdrop-blur-md"
+      className="flex flex-wrap items-center gap-2.5 px-4 py-2 border-b sticky top-0 z-10 backdrop-blur-md"
       style={{
         background:  "color-mix(in srgb, var(--v-panel) 85%, transparent)",
         borderColor: "var(--v-line)",
       }}
     >
-      <div ref={searchRef} className="relative flex-1 min-w-0">
+      <div ref={searchRef} className="relative flex-1 min-w-[16rem]">
         <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "var(--v-ink-dim)" }} />
         <input
           value={search}
@@ -1415,21 +1731,7 @@ function Toolbar({
       </div>
 
       <div className="flex items-center gap-2.5 flex-shrink-0">
-        <div className="flex rounded-lg p-0.5 overflow-x-auto max-w-[min(100%,48rem)]" style={{ background: "var(--v-line)" }}>
-          {RANGES.map(r => (
-            <button
-              key={r}
-              onClick={() => setRange(r)}
-              className={`px-3 py-1 rounded-md text-[10px] sm:text-[11px] font-mono font-medium transition-all flex-shrink-0 ${range === r ? "" : RANGE_TIER[r]}`}
-              style={{
-                background: range === r ? "var(--v-ink)"   : "transparent",
-                color:      range === r ? "var(--v-panel)" : "var(--v-ink-soft)",
-              }}
-            >
-              {r}
-            </button>
-          ))}
-        </div>
+        <RangePicker range={range} setRange={setRange} />
 
         <DropdownMenu options={FILTER_OPTS} value={filter} onChange={setFilter} icon={<Filter size={12} />} label="Filter" />
         <DropdownMenu
@@ -1443,7 +1745,7 @@ function Toolbar({
 
         <button
           onClick={() => setChangeDisplay(changeDisplay === "percent" ? "amount" : "percent")}
-          className="flex items-center justify-center w-8 py-1.5 rounded-lg text-xs font-mono font-semibold transition-colors"
+          className="flex items-center justify-center w-8 py-1.5 rounded-lg text-xs font-mono font-semibold transition-colors flex-shrink-0"
           style={{ background: "var(--v-line)", color: "var(--v-ink)" }}
           title={changeDisplay === "percent" ? "Showing % change — click for $ change" : "Showing $ change — click for % change"}
         >
@@ -1581,7 +1883,7 @@ function DetailChart({ symbol, range, isGain, lastPrice }: { symbol: string; ran
         <Tooltip
           content={({ active, payload }) => {
             if (!active || !payload?.[0]) return null;
-            const { t, p } = payload[0].payload as { t: number; p: number };
+            const { t, p, v } = payload[0].payload as { t: number; p: number; v?: number };
             return (
               <div
                 className="px-2.5 py-2 rounded-xl border text-xs font-mono shadow-xl"
@@ -1589,6 +1891,9 @@ function DetailChart({ symbol, range, isGain, lastPrice }: { symbol: string; ran
               >
                 <div className="mb-0.5" style={{ color: "var(--v-ink-dim)" }}>{fmtTime(t, range)}</div>
                 <div className="font-semibold">{fmt$(p)}</div>
+                {v != null && v > 0 && (
+                  <div className="mt-0.5" style={{ color: "var(--v-ink-dim)" }}>Vol {fmtVol(v)}</div>
+                )}
               </div>
             );
           }}
@@ -1910,14 +2215,6 @@ function StockDetailView({
           <span className="text-xs" style={{ color: "var(--v-ink-soft)" }}>{stock.name}</span>
         </div>
         <div className="ml-auto flex items-center gap-3 flex-wrap justify-end">
-          <div className="font-mono text-xl font-semibold" style={{ color: "var(--v-ink)" }}>{fmt$(stock.price)}</div>
-          <div
-            className="text-xs font-mono font-medium px-2 py-1 rounded-lg flex items-center gap-1"
-            style={{ color: isGain ? G : R, background: isGain ? "rgba(52,211,153,0.1)" : "rgba(248,113,130,0.1)" }}
-          >
-            {isGain ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
-            {fmtChangeAmt(delta.change)} ({fmtPct(delta.changePercent)})
-          </div>
           {canTrade ? (
             <>
               <button
@@ -1955,44 +2252,92 @@ function StockDetailView({
         </div>
       </div>
 
-      {holding && (
-        <div className="mx-5 mt-4 rounded-2xl border px-5 py-3 flex flex-wrap gap-x-8 gap-y-2" style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}>
+      <div className="mx-5 mt-4 flex flex-wrap gap-3">
+        <div className="rounded-2xl border px-5 py-3 flex flex-wrap gap-x-8 gap-y-2" style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}>
           <div>
-            <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Owned</div>
+            <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>
+              {stock.marketState === "REGULAR" ? "Live" : "At Close"}
+            </div>
             <div className="font-mono text-sm font-semibold mt-0.5" style={{ color: "var(--v-ink)" }}>
-              {holding.shares.toLocaleString("en-US", { maximumFractionDigits: 4 })} shares
+              {fmt$(stock.price)}
             </div>
           </div>
           <div>
-            <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Avg cost</div>
-            <div className="font-mono text-sm font-semibold mt-0.5" style={{ color: "var(--v-ink)" }}>{fmt$(holding.avgCost)}</div>
-          </div>
-          <div>
-            <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Profit</div>
-            <div className="font-mono text-sm font-semibold mt-0.5" style={{ color: profit >= 0 ? G : R }}>
-              {profit >= 0 ? "+" : ""}{fmt$(profit)}
+            <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Change</div>
+            <div
+              className="font-mono text-sm font-semibold mt-0.5"
+              style={{ color: stock.changePercent >= 0 ? G : R }}
+            >
+              {fmtChangeAmt(stock.change)} ({fmtPct(stock.changePercent)})
             </div>
           </div>
         </div>
-      )}
+
+        {stock.preMarket && stock.preMarket.price > 0 && (
+          <div className="rounded-2xl border px-5 py-3 flex flex-wrap gap-x-8 gap-y-2" style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}>
+            <div>
+              <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Pre-Market</div>
+              <div className="font-mono text-sm font-semibold mt-0.5" style={{ color: "var(--v-ink)" }}>
+                {fmt$(stock.preMarket.price)}
+              </div>
+            </div>
+            <div>
+              <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Change</div>
+              <div
+                className="font-mono text-sm font-semibold mt-0.5"
+                style={{ color: stock.preMarket.changePercent >= 0 ? G : R }}
+              >
+                {fmtChangeAmt(stock.preMarket.change)} ({fmtPct(stock.preMarket.changePercent)})
+              </div>
+            </div>
+          </div>
+        )}
+
+        {stock.afterHours && stock.afterHours.price > 0 && (
+          <div className="rounded-2xl border px-5 py-3 flex flex-wrap gap-x-8 gap-y-2" style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}>
+            <div>
+              <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>After Hours</div>
+              <div className="font-mono text-sm font-semibold mt-0.5" style={{ color: "var(--v-ink)" }}>
+                {fmt$(stock.afterHours.price)}
+              </div>
+            </div>
+            <div>
+              <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Change</div>
+              <div
+                className="font-mono text-sm font-semibold mt-0.5"
+                style={{ color: stock.afterHours.changePercent >= 0 ? G : R }}
+              >
+                {fmtChangeAmt(stock.afterHours.change)} ({fmtPct(stock.afterHours.changePercent)})
+              </div>
+            </div>
+          </div>
+        )}
+
+        {holding && (
+          <div className="rounded-2xl border px-5 py-3 flex flex-wrap gap-x-8 gap-y-2" style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}>
+            <div>
+              <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Owned</div>
+              <div className="font-mono text-sm font-semibold mt-0.5" style={{ color: "var(--v-ink)" }}>
+                {holding.shares.toLocaleString("en-US", { maximumFractionDigits: 4 })} shares
+              </div>
+            </div>
+            <div>
+              <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Avg cost</div>
+              <div className="font-mono text-sm font-semibold mt-0.5" style={{ color: "var(--v-ink)" }}>{fmt$(holding.avgCost)}</div>
+            </div>
+            <div>
+              <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Profit</div>
+              <div className="font-mono text-sm font-semibold mt-0.5" style={{ color: profit >= 0 ? G : R }}>
+                {profit >= 0 ? "+" : ""}{fmt$(profit)}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
 
       <div className="px-5 pt-5">
         <div className="flex justify-end mb-3">
-          <div className="flex rounded-lg p-0.5" style={{ background: "var(--v-line)" }}>
-            {DETAIL_RANGES.map(r => (
-              <button
-                key={r}
-                onClick={() => onRangeChange(r)}
-                className={`px-3 py-1 rounded-md text-[11px] font-mono font-medium transition-all ${range === r ? "" : RANGE_TIER[r]}`}
-                style={{
-                  background: range === r ? "var(--v-ink)"   : "transparent",
-                  color:      range === r ? "var(--v-panel)" : "var(--v-ink-soft)",
-                }}
-              >
-                {r}
-              </button>
-            ))}
-          </div>
+          <RangePicker range={range} setRange={onRangeChange} ranges={DETAIL_RANGES} />
         </div>
         <DetailChart symbol={stock.symbol} range={range} isGain={isGain} lastPrice={stock.price} />
       </div>
@@ -2964,6 +3309,9 @@ export default function App() {
   const [viewMode,        setViewMode]       = useState<ViewMode>("grid");
   const [watchlists,      setWatchlists]     = useState<Watchlist[]>(DEFAULT_WATCHLISTS);
   const [activeWatchlist, setActiveWatchlist]= useState("portfolio");
+  const [sidebarOpen,     setSidebarOpen]    = useState(() =>
+    typeof window !== "undefined" ? window.matchMedia("(min-width: 768px)").matches : true,
+  );
   const [selectedSymbol,  setSelectedSymbol] = useState<string | null>(null);
   const [pinnedSymbols,   setPinnedSymbols]  = useState<string[]>([]);
   const [customOrders,    setCustomOrders]   = useState<Record<string, string[]>>({});
@@ -3263,17 +3611,34 @@ export default function App() {
   );
 
   const portfolioStocks = useMemo(() => {
-    return holdings
+    const rows = holdings
       .map(h => {
         const stock = stocks.find(s => s.symbol === h.symbol);
         return stock ? { stock, holding: h } : null;
       })
       .filter((x): x is { stock: StockMeta; holding: Holding } => x != null);
-  }, [holdings, stocks]);
+
+    if (sort === "manual") return rows;
+
+    const rangeDelta = (x: StockMeta) => quoteChangeForRange(x.symbol, homeRange, x);
+    const cmp: Record<Exclude<SortMode, "manual">, (a: StockMeta, b: StockMeta) => number> = {
+      change:    (a, b) => rangeDelta(b).changePercent - rangeDelta(a).changePercent,
+      changeAmt: (a, b) => rangeDelta(b).change - rangeDelta(a).change,
+      price:     (a, b) => b.price - a.price,
+      cap:       (a, b) => b.marketCap - a.marketCap,
+      volume:    (a, b) => b.volume - a.volume,
+      symbol:    (a, b) => b.symbol.localeCompare(a.symbol),
+      name:      (a, b) => b.name.localeCompare(a.name),
+    };
+    rows.sort((a, b) => cmp[sort](a.stock, b.stock));
+    if (sortDir === "asc") rows.reverse();
+    return rows;
+  }, [holdings, stocks, sort, sortDir, homeRange, sparkEpoch]);
 
   const visibleStocks = useMemo(() => {
     let s = [...activeStocks];
     const rangeDelta = (x: StockMeta) => quoteChangeForRange(x.symbol, homeRange, x);
+    const owned = new Set(holdings.map(h => h.symbol));
 
     if (search) {
       const q = search.toLowerCase();
@@ -3282,6 +3647,7 @@ export default function App() {
 
     if (filter === "gainers") s = s.filter(x => rangeDelta(x).changePercent > 0);
     else if (filter === "losers") s = s.filter(x => rangeDelta(x).changePercent < 0);
+    else if (filter === "owned") s = s.filter(x => owned.has(x.symbol));
 
     if (sort === "manual") {
       const order = customOrders[activeWatchlist] ?? activeList.symbols;
@@ -3306,15 +3672,15 @@ export default function App() {
         price:     (a, b) => b.price - a.price,
         cap:       (a, b) => b.marketCap - a.marketCap,
         volume:    (a, b) => b.volume - a.volume,
-        symbol:    (a, b) => a.symbol.localeCompare(b.symbol),
-        name:      (a, b) => a.name.localeCompare(b.name),
+        symbol:    (a, b) => b.symbol.localeCompare(a.symbol),
+        name:      (a, b) => b.name.localeCompare(a.name),
       };
       s.sort(cmp[sort]);
       if (sortDir === "asc") s.reverse();
     }
 
     return s;
-  }, [activeStocks, search, filter, sort, sortDir, customOrders, activeWatchlist, pinnedSymbols, activeList.symbols, homeRange, sparkEpoch]);
+  }, [activeStocks, search, filter, sort, sortDir, customOrders, activeWatchlist, pinnedSymbols, activeList.symbols, homeRange, sparkEpoch, holdings]);
 
   const selectedStock = selectedSymbol ? stocks.find(s => s.symbol === selectedSymbol) ?? null : null;
 
@@ -3424,6 +3790,13 @@ export default function App() {
     }
   }, [detailRanges]);
 
+  const selectSymbol = useCallback((symbol: string) => {
+    setSelectedSymbol(symbol);
+    ensureQuotes([symbol])
+      .then(live => { setStocks([...live]); setDataStatus("live"); })
+      .catch(() => {});
+  }, []);
+
   const setDetailRange = useCallback((symbol: string, r: TimeRange) => {
     setDetailRanges(prev => (prev[symbol] === r ? prev : { ...prev, [symbol]: r }));
     prefetchSparklines([symbol], r).catch(() => {});
@@ -3525,6 +3898,15 @@ export default function App() {
     }
   }, [sort]);
 
+  const onColumnSort = useCallback((s: SortMode) => {
+    if (s === sort) {
+      setSortDir(d => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSort(s);
+      setSortDir("asc");
+    }
+  }, [sort]);
+
   const sharedCardProps = (stock: StockMeta, holding?: Holding) => ({
     stock, range: homeRange, watchlists,
     holding,
@@ -3536,7 +3918,7 @@ export default function App() {
     isPinned:  pinnedSymbols.includes(stock.symbol),
     isDraggable: isDraggable && !holding,
     isDragOver: dragOver === stock.symbol,
-    onSelect:  () => setSelectedSymbol(stock.symbol),
+    onSelect:  () => selectSymbol(stock.symbol),
     onToggleWatchlist: toggleWatchlist,
     onTogglePin: togglePin,
     onDragStart: handleDragStart,
@@ -3649,10 +4031,10 @@ export default function App() {
             />
           ) : (
             <div
-              className="flex-1 overflow-y-auto p-4"
+              className="flex-1 overflow-auto p-4"
               style={{ scrollbarWidth: "thin", scrollbarColor: "var(--v-line-strong) transparent" }}
             >
-              <div className="flex items-baseline justify-between gap-3 mb-4 px-1">
+              <div className="flex items-center justify-between gap-3 mb-4 px-1">
                 <div>
                   <div className="font-mono text-[13px] font-semibold tracking-wide" style={{ color: "var(--v-ink)" }}>
                     Your holdings
@@ -3663,8 +4045,42 @@ export default function App() {
                       : `${holdings.length} position${holdings.length !== 1 ? "s" : ""} · P/L ${totalProfit >= 0 ? "+" : ""}${fmt$(totalProfit)}`}
                   </div>
                 </div>
-                <div className="font-mono text-sm font-semibold" style={{ color: "var(--v-ink)" }}>
-                  {fmt$(portfolioValue)}
+                <div className="flex items-center gap-3 flex-shrink-0">
+                  <button
+                    onClick={() => setChangeDisplay(changeDisplay === "percent" ? "amount" : "percent")}
+                    className="flex items-center justify-center w-8 py-1.5 rounded-lg text-xs font-mono font-semibold transition-colors"
+                    style={{ background: "var(--v-line)", color: "var(--v-ink)" }}
+                    title={changeDisplay === "percent" ? "Showing % — click for $" : "Showing $ — click for %"}
+                  >
+                    {changeDisplay === "percent" ? "%" : "$"}
+                  </button>
+                  <div className="flex rounded-lg p-0.5" style={{ background: "var(--v-line)" }}>
+                    <button
+                      onClick={() => setViewMode("grid")}
+                      className="w-7 h-7 rounded-md flex items-center justify-center transition-all"
+                      style={{
+                        background: viewMode === "grid" ? "var(--v-ink)"   : "transparent",
+                        color:      viewMode === "grid" ? "var(--v-panel)" : "var(--v-ink-soft)",
+                      }}
+                      title="Grid view"
+                    >
+                      <LayoutGrid size={13} />
+                    </button>
+                    <button
+                      onClick={() => setViewMode("list")}
+                      className="w-7 h-7 rounded-md flex items-center justify-center transition-all"
+                      style={{
+                        background: viewMode === "list" ? "var(--v-ink)"   : "transparent",
+                        color:      viewMode === "list" ? "var(--v-panel)" : "var(--v-ink-soft)",
+                      }}
+                      title="List view"
+                    >
+                      <List size={13} />
+                    </button>
+                  </div>
+                  <div className="font-mono text-sm font-semibold" style={{ color: "var(--v-ink)" }}>
+                    {fmt$(portfolioValue)}
+                  </div>
                 </div>
               </div>
               {portfolioStocks.length === 0 ? (
@@ -3672,11 +4088,37 @@ export default function App() {
                   <BarChart2 size={32} style={{ color: "var(--v-line-strong)" }} />
                   <span>No shares owned yet</span>
                 </div>
-              ) : (
+              ) : viewMode === "grid" ? (
                 <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
                   {portfolioStocks.map(({ stock, holding }) => (
                     <StockCard key={stock.symbol} {...sharedCardProps(stock, holding)} />
                   ))}
+                </div>
+              ) : (
+                <div className="min-w-max">
+                  <HoldingListHeader
+                    sort={sort}
+                    sortDir={sortDir}
+                    changeDisplay={changeDisplay}
+                    onColumnSort={onColumnSort}
+                  />
+                  <div className="flex flex-col gap-1.5">
+                    {portfolioStocks.map(({ stock, holding }) => (
+                      <HoldingRow
+                        key={stock.symbol}
+                        stock={stock}
+                        holding={holding}
+                        range={homeRange}
+                        watchlists={watchlists}
+                        isPinned={pinnedSymbols.includes(stock.symbol)}
+                        changeDisplay={changeDisplay}
+                        refreshKey={sparkEpoch}
+                        onSelect={() => selectSymbol(stock.symbol)}
+                        onToggleWatchlist={toggleWatchlist}
+                        onTogglePin={togglePin}
+                      />
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -3689,6 +4131,7 @@ export default function App() {
           <WatchlistSidebar
             watchlists={watchlists}
             activeId={activeWatchlist}
+            open={sidebarOpen}
             onSelect={id => { setActiveWatchlist(id); setSelectedSymbol(null); }}
             onCreate={createWatchlist}
             onDelete={deleteWatchlist}
@@ -3696,7 +4139,25 @@ export default function App() {
             onReorder={reorderWatchlists}
           />
 
-          <div className="flex-1 flex flex-col overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(v => !v)}
+            className="flex-shrink-0 self-stretch w-6 flex items-center justify-center border-r z-20 transition-colors hover:bg-white/5"
+            style={{
+              background: "var(--v-panel)",
+              borderColor: "var(--v-line)",
+              color: "var(--v-ink-soft)",
+            }}
+            title={sidebarOpen ? "Hide watchlists" : "Show watchlists"}
+            aria-label={sidebarOpen ? "Hide watchlists" : "Show watchlists"}
+            aria-expanded={sidebarOpen}
+          >
+            {sidebarOpen
+              ? <ChevronLeft size={14} />
+              : <ChevronRight size={14} />}
+          </button>
+
+          <div className="flex-1 flex flex-col overflow-hidden min-w-0">
             {selectedStock ? (
               <StockDetailView
                 stock={selectedStock}
@@ -3728,7 +4189,7 @@ export default function App() {
                 />
 
                 <div
-                  className="flex-1 overflow-y-auto p-4"
+                  className="flex-1 overflow-auto p-4"
                   style={{ scrollbarWidth: "thin", scrollbarColor: "var(--v-line-strong) transparent" }}
                   onDragOver={e => e.preventDefault()}
                 >
@@ -3744,14 +4205,19 @@ export default function App() {
                       ))}
                     </div>
                   ) : (
-                    <>
-                      <ListHeader />
-                      <div className="flex flex-col gap-1.5 min-w-0">
+                    <div className="min-w-max">
+                      <ListHeader
+                        sort={sort}
+                        sortDir={sortDir}
+                        changeDisplay={changeDisplay}
+                        onColumnSort={onColumnSort}
+                      />
+                      <div className="flex flex-col gap-1.5">
                         {visibleStocks.map(stock => (
                           <StockRow key={stock.symbol} {...sharedCardProps(stock)} />
                         ))}
                       </div>
-                    </>
+                    </div>
                   )}
                 </div>
               </>

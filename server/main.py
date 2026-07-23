@@ -7,6 +7,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -239,6 +240,77 @@ def _quote_one(symbol: str) -> dict[str, Any]:
         or display
     )
 
+    market_state = str(info.get("marketState") or fast.get("marketState") or "").upper()
+    post_price = pick("postMarketPrice", "post_market_price")
+    post_change = pick("postMarketChange", "post_market_change")
+    post_change_pct = pick("postMarketChangePercent", "post_market_change_percent")
+    pre_price = pick("preMarketPrice", "pre_market_price")
+    pre_change = pick("preMarketChange", "pre_market_change")
+    pre_change_pct = pick("preMarketChangePercent", "pre_market_change_percent")
+    reg_price = pick("regularMarketPrice") or 0.0
+    last = pick("lastPrice", "last_price")
+
+    is_pre = market_state in ("PRE", "PREPRE") or market_state.startswith("PRE")
+    is_post = market_state in ("POST", "POSTPOST") or market_state.startswith("POST")
+
+    # Prefer regular-session price for the main quote outside regular hours
+    if (is_pre or is_post or market_state == "CLOSED") and reg_price > 0:
+        price = reg_price
+        change = pick("regularMarketChange")
+        change_pct = pick("regularMarketChangePercent")
+        if change is None and prev:
+            change = price - prev
+        if change_pct is None and prev:
+            change_pct = ((price - prev) / prev) * 100 if prev else 0.0
+        if change is None:
+            change = 0.0
+        if change_pct is None:
+            change_pct = 0.0
+
+    def _ext_quote(
+        px: float | None,
+        ch: float | None,
+        ch_pct: float | None,
+        *,
+        fallback_last: bool,
+    ) -> dict[str, float] | None:
+        use = px
+        if (not use or use <= 0) and fallback_last and last and reg_price and abs(last - reg_price) > 1e-4:
+            use = last
+        if not use or use <= 0:
+            return None
+        c = ch
+        cp = ch_pct
+        if c is None:
+            c = use - price
+        if cp is None:
+            cp = ((use - price) / price) * 100 if price else 0.0
+        return {"price": use, "change": c or 0.0, "changePercent": cp or 0.0}
+
+    # After hours — when in POST, or when Yahoo still exposes postMarketPrice
+    after_hours = None
+    if is_post or (post_price and post_price > 0):
+        after_hours = _ext_quote(post_price, post_change, post_change_pct, fallback_last=is_post)
+
+    # Pre-market — when in PRE, or when Yahoo exposes preMarketPrice
+    pre_market = None
+    if is_pre or (pre_price and pre_price > 0):
+        pre_market = _ext_quote(pre_price, pre_change, pre_change_pct, fallback_last=is_pre)
+
+    # If state is missing but last ≠ regular during off-hours, treat as extended
+    if pre_market is None and after_hours is None and last and reg_price and abs(last - reg_price) > 1e-4:
+        if market_state != "REGULAR":
+            # Morning (local) → pre, otherwise after
+            try:
+                hour = datetime.now().astimezone().hour
+            except Exception:
+                hour = datetime.now(timezone.utc).hour
+            ext = _ext_quote(last, None, None, fallback_last=False)
+            if hour < 13:
+                pre_market = ext
+            else:
+                after_hours = ext
+
     return {
         "symbol": display,
         "name": str(name),
@@ -257,6 +329,9 @@ def _quote_one(symbol: str) -> dict[str, Any]:
         "dayLow": pick("dayLow", "regularMarketDayLow") or 0.0,
         "eps": pick("trailingEps", "epsTrailingTwelveMonths"),
         "dividendYield": div,
+        "marketState": market_state or None,
+        "afterHours": after_hours,
+        "preMarket": pre_market,
         "stale": False,
         "asOf": time.time(),
     }
@@ -281,6 +356,9 @@ def _empty_quote(sym: str, err: str | None = None) -> dict[str, Any]:
         "dayLow": 0,
         "eps": None,
         "dividendYield": None,
+        "marketState": None,
+        "afterHours": None,
+        "preMarket": None,
         "stale": True,
     }
     if err:
@@ -364,8 +442,13 @@ def history(symbol: str, range: str = Query("1D")):
     df = None
     t = yf.Ticker(_yf_symbol(display))
     try:
-        # Unadjusted closes so chart aligns with quote price
-        df = t.history(period=cfg["period"], interval=cfg["interval"], auto_adjust=False)
+        # Unadjusted closes so chart aligns with quote price; include pre/post on 1D
+        df = t.history(
+            period=cfg["period"],
+            interval=cfg["interval"],
+            auto_adjust=False,
+            prepost=(key == "1D"),
+        )
     except Exception:
         failed = True
 
@@ -385,14 +468,15 @@ def history(symbol: str, range: str = Query("1D")):
         if close is None:
             continue
         t_ms = int(ts.timestamp() * 1000)
-        points.append({"t": t_ms, "p": close})
+        vol = _num(row.get("Volume")) or 0.0
+        points.append({"t": t_ms, "p": close, "v": vol})
 
     # Snap final point to live quote so graph matches displayed price
     live = _live_price(t)
     if live is not None and points:
-        points[-1] = {"t": points[-1]["t"], "p": live}
+        points[-1] = {"t": points[-1]["t"], "p": live, "v": points[-1].get("v", 0)}
     elif live is not None and not points:
-        points = [{"t": int(time.time() * 1000), "p": live}]
+        points = [{"t": int(time.time() * 1000), "p": live, "v": 0}]
 
     result = {"points": points, "lastPrice": live, "stale": False}
     if points:

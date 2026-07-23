@@ -17,11 +17,23 @@ export interface StockMeta {
   eps: number | null;
   dividendYield: number | null;
   stale?: boolean;
+  marketState?: string;
+  afterHours?: {
+    price: number;
+    change: number;
+    changePercent: number;
+  } | null;
+  preMarket?: {
+    price: number;
+    change: number;
+    changePercent: number;
+  } | null;
 }
 
 export interface PricePoint {
   t: number;
   p: number;
+  v?: number;
 }
 
 export interface SearchResult {
@@ -73,7 +85,7 @@ function emptyMeta(seed: { symbol: string; name: string; sector: string }): Stoc
     ...seed,
     price: 0, change: 0, changePercent: 0, volume: 0, avgVolume: 0,
     marketCap: 0, pe: null, high52w: 0, low52w: 0, open: 0, dayHigh: 0, dayLow: 0,
-    eps: null, dividendYield: null,
+    eps: null, dividendYield: null, afterHours: null, preMarket: null,
   };
 }
 
@@ -186,7 +198,28 @@ function asStock(
     eps: nNull(raw.eps) ?? prev?.eps ?? null,
     dividendYield: nNull(raw.dividendYield) ?? prev?.dividendYield ?? null,
     stale: apiStale,
+    marketState: typeof raw.marketState === "string" ? raw.marketState : prev?.marketState,
+    afterHours: parseSessionQuote(raw.afterHours, prev?.afterHours),
+    preMarket: parseSessionQuote(raw.preMarket, prev?.preMarket),
   };
+}
+
+function parseSessionQuote(
+  raw: unknown,
+  prev: StockMeta["afterHours"] | undefined,
+): StockMeta["afterHours"] {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const o = raw as Record<string, unknown>;
+    const p = n(o.price, 0);
+    if (p > 0) {
+      return {
+        price: p,
+        change: n(o.change, 0),
+        changePercent: n(o.changePercent, 0),
+      };
+    }
+  }
+  return raw === null ? null : (prev ?? null);
 }
 
 function freshnessFrom(quotes: StockMeta[]): QuotesFreshness {
@@ -280,12 +313,10 @@ export async function mergeQuotes(symbols: string[]): Promise<StockMeta[]> {
 
 /** Fetch symbols and merge into the live snapshot (for search/detail of any ticker). */
 export async function ensureQuotes(symbols: string[]): Promise<StockMeta[]> {
-  const need = symbols.filter(s => {
-    const m = STOCKS_META.find(x => x.symbol === s);
-    return !m || m.price <= 0;
-  });
-  if (!need.length) return STOCKS_META;
-  return mergeQuotes(need);
+  const unique = [...new Set(symbols.map(s => s.trim()).filter(Boolean))];
+  if (!unique.length) return STOCKS_META;
+  // Always refresh requested symbols so session fields (pre/post market) stay current
+  return mergeQuotes(unique);
 }
 
 export async function fetchHistory(symbol: string, range: TimeRange, lastPrice?: number): Promise<PricePoint[]> {
