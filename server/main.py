@@ -68,6 +68,77 @@ RANGE_MAP = {
     "ALL": {"period": "max", "interval": "1d"},
 }
 
+# Coarser intervals for card/list sparklines (smaller Yahoo payloads).
+SPARK_RANGE_MAP = {
+    "1D":  {"period": "1d",  "interval": "15m"},
+    "1W":  {"period": "5d",  "interval": "60m"},
+    "1M":  {"period": "1mo", "interval": "1d"},
+    "3M":  {"period": "3mo", "interval": "1d"},
+    "6M":  {"period": "6mo", "interval": "1d"},
+    "YTD": {"period": "ytd", "interval": "1d"},
+    "1Y":  {"period": "1y",  "interval": "1d"},
+    "2Y":  {"period": "2y",  "interval": "1wk"},
+    "5Y":  {"period": "5y",  "interval": "1wk"},
+    "10Y": {"period": "10y", "interval": "1wk"},
+    "ALL": {"period": "max", "interval": "1wk"},
+}
+
+SPARK_MAX_POINTS = {
+    "1D": 48, "1W": 56, "1M": 48, "3M": 64, "6M": 72,
+    "YTD": 72, "1Y": 72, "2Y": 80, "5Y": 80, "10Y": 80, "ALL": 80,
+}
+
+
+def _downsample_lttb(points: list[dict[str, float]], max_points: int) -> list[dict[str, float]]:
+    """Largest-Triangle-Three-Buckets downsample; preserves first/last."""
+    n = len(points)
+    if max_points < 3 or n <= max_points:
+        return points
+
+    out: list[dict[str, float]] = [points[0]]
+    bucket_size = (n - 2) / (max_points - 2)
+    a = 0
+
+    for i in range(max_points - 2):
+        avg_range_start = int(math.floor((i + 1) * bucket_size)) + 1
+        avg_range_end = int(math.floor((i + 2) * bucket_size)) + 1
+        avg_range_end = min(avg_range_end, n)
+
+        avg_x = 0.0
+        avg_y = 0.0
+        avg_range_length = avg_range_end - avg_range_start
+        if avg_range_length <= 0:
+            avg_range_length = 1
+            avg_range_start = min(avg_range_start, n - 1)
+            avg_range_end = avg_range_start + 1
+        for j in range(avg_range_start, avg_range_end):
+            avg_x += float(points[j]["t"])
+            avg_y += float(points[j]["p"])
+        avg_x /= avg_range_length
+        avg_y /= avg_range_length
+
+        range_offs = int(math.floor(i * bucket_size)) + 1
+        range_to = int(math.floor((i + 1) * bucket_size)) + 1
+        range_to = min(range_to, n - 1)
+
+        point_a_x = float(points[a]["t"])
+        point_a_y = float(points[a]["p"])
+        max_area = -1.0
+        next_a = range_offs
+        for j in range(range_offs, range_to):
+            area = abs(
+                (point_a_x - avg_x) * (float(points[j]["p"]) - point_a_y)
+                - (point_a_x - float(points[j]["t"])) * (avg_y - point_a_y)
+            ) * 0.5
+            if area > max_area:
+                max_area = area
+                next_a = j
+        out.append(points[next_a])
+        a = next_a
+
+    out.append(points[-1])
+    return out
+
 # TTL cache: Yahoo aggressively rate-limits, so serve cached data and fall
 # back to stale entries when yfinance errors out. Persisted to disk so
 # restarts still have last-good quotes instead of zeros / client fakes.
@@ -428,14 +499,22 @@ def quotes(symbols: str = Query(..., description="Comma-separated tickers")):
 
 
 @app.get("/api/history/{symbol}")
-def history(symbol: str, range: str = Query("1D")):
+def history(
+    symbol: str,
+    range: str = Query("1D"),
+    resolution: str = Query("full"),
+):
     key = range.upper()
-    cfg = RANGE_MAP.get(key)
+    res = (resolution or "full").strip().lower()
+    if res not in ("full", "spark"):
+        raise HTTPException(400, "invalid resolution")
+
+    cfg = (SPARK_RANGE_MAP if res == "spark" else RANGE_MAP).get(key)
     if not cfg:
         raise HTTPException(400, "invalid range")
 
     display = _normalize_symbol(symbol)
-    cache_key = f"h:{display}:{key}"
+    cache_key = f"h:{display}:{key}" + (":spark" if res == "spark" else "")
     cached, fresh = _cache_get(cache_key, HISTORY_TTL.get(key, 600.0))
     if cached is not None and fresh:
         out = dict(cached) if isinstance(cached, dict) else cached
@@ -483,7 +562,10 @@ def history(symbol: str, range: str = Query("1D")):
     elif live is not None and not points:
         points = [{"t": int(time.time() * 1000), "p": live, "v": 0}]
 
-    result = {"points": points, "lastPrice": live, "stale": False}
+    if res == "spark" and points:
+        points = _downsample_lttb(points, SPARK_MAX_POINTS.get(key, 64))
+
+    result = {"points": points, "lastPrice": live, "stale": False, "resolution": res}
     if points:
         _cache_put(cache_key, result)
     return result

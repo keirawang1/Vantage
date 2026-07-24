@@ -141,10 +141,80 @@ export let lastQuotesFreshness: QuotesFreshness =
 
 const historyCache = new Map<string, PricePoint[]>();
 const historyInflight = new Map<string, Promise<PricePoint[]>>();
-const HISTORY_VERSION = 3;
+const HISTORY_VERSION = 4;
 
-function cacheKey(symbol: string, range: TimeRange) {
-  return `${HISTORY_VERSION}:${symbol}:${range}`;
+export type HistoryResolution = "full" | "spark";
+
+function cacheKey(symbol: string, range: TimeRange, resolution: HistoryResolution = "full") {
+  const base = `${HISTORY_VERSION}:${symbol}:${range}`;
+  return resolution === "spark" ? `${base}:spark` : base;
+}
+
+/** Max Recharts points for card sparklines (client safety net). */
+export function sparklineMaxPoints(range: TimeRange): number {
+  switch (range) {
+    case "1D": return 40;
+    case "1W": return 48;
+    case "1M": return 48;
+    case "3M": return 56;
+    case "6M":
+    case "YTD":
+    case "1Y": return 64;
+    default: return 72;
+  }
+}
+
+/** Largest-Triangle-Three-Buckets downsample; preserves first/last. */
+export function downsampleLTTB(points: PricePoint[], maxPoints: number): PricePoint[] {
+  const n = points.length;
+  if (maxPoints < 3 || n <= maxPoints) return points;
+
+  const out: PricePoint[] = [points[0]];
+  const bucketSize = (n - 2) / (maxPoints - 2);
+  let a = 0;
+
+  for (let i = 0; i < maxPoints - 2; i++) {
+    let avgRangeStart = Math.floor((i + 1) * bucketSize) + 1;
+    let avgRangeEnd = Math.floor((i + 2) * bucketSize) + 1;
+    avgRangeEnd = Math.min(avgRangeEnd, n);
+
+    let avgX = 0;
+    let avgY = 0;
+    let avgRangeLength = avgRangeEnd - avgRangeStart;
+    if (avgRangeLength <= 0) {
+      avgRangeLength = 1;
+      avgRangeStart = Math.min(avgRangeStart, n - 1);
+      avgRangeEnd = avgRangeStart + 1;
+    }
+    for (let j = avgRangeStart; j < avgRangeEnd; j++) {
+      avgX += points[j].t;
+      avgY += points[j].p;
+    }
+    avgX /= avgRangeLength;
+    avgY /= avgRangeLength;
+
+    const rangeOffs = Math.floor(i * bucketSize) + 1;
+    const rangeTo = Math.min(Math.floor((i + 1) * bucketSize) + 1, n - 1);
+
+    const pointAx = points[a].t;
+    const pointAy = points[a].p;
+    let maxArea = -1;
+    let nextA = rangeOffs;
+    for (let j = rangeOffs; j < rangeTo; j++) {
+      const area = Math.abs(
+        (pointAx - avgX) * (points[j].p - pointAy) - (pointAx - points[j].t) * (avgY - pointAy),
+      ) * 0.5;
+      if (area > maxArea) {
+        maxArea = area;
+        nextA = j;
+      }
+    }
+    out.push(points[nextA]);
+    a = nextA;
+  }
+
+  out.push(points[n - 1]);
+  return out;
 }
 
 function n(v: unknown, fallback = 0) {
@@ -263,9 +333,10 @@ export function invalidateHistory(symbol?: string) {
 }
 
 export function invalidateHistoryRange(range: TimeRange) {
-  const suffix = `:${range}`;
   for (const k of [...historyCache.keys()]) {
-    if (k.endsWith(suffix)) historyCache.delete(k);
+    if (k.endsWith(`:${range}`) || k.endsWith(`:${range}:spark`)) {
+      historyCache.delete(k);
+    }
   }
 }
 
@@ -331,8 +402,14 @@ export async function ensureQuotes(symbols: string[]): Promise<StockMeta[]> {
   return mergeQuotes(unique);
 }
 
-export async function fetchHistory(symbol: string, range: TimeRange, lastPrice?: number): Promise<PricePoint[]> {
-  const key = cacheKey(symbol, range);
+export async function fetchHistory(
+  symbol: string,
+  range: TimeRange,
+  lastPrice?: number,
+  opts?: { resolution?: HistoryResolution },
+): Promise<PricePoint[]> {
+  const resolution: HistoryResolution = opts?.resolution ?? "full";
+  const key = cacheKey(symbol, range, resolution);
   const cached = historyCache.get(key);
   // Prefer cache only when points include volume
   if (cached?.length && cached.some(p => typeof p.v === "number")) {
@@ -346,8 +423,12 @@ export async function fetchHistory(symbol: string, range: TimeRange, lastPrice?:
   }
 
   const promise = (async () => {
+    const qs = new URLSearchParams({
+      range,
+      resolution,
+    });
     const res = await fetch(
-      apiUrl(`/api/history/${encodeURIComponent(symbol)}?range=${encodeURIComponent(range)}`)
+      apiUrl(`/api/history/${encodeURIComponent(symbol)}?${qs.toString()}`)
     );
     if (!res.ok) throw new Error(`History fetch failed (${res.status})`);
     const json = await res.json();
@@ -372,8 +453,14 @@ export async function fetchHistory(symbol: string, range: TimeRange, lastPrice?:
 }
 
 /** Sync read of cached history only (empty until fetched). */
-export function getHistory(symbol: string, range: TimeRange, lastPrice?: number): PricePoint[] {
-  return alignHistoryToPrice(historyCache.get(cacheKey(symbol, range)) ?? [], lastPrice);
+export function getHistory(
+  symbol: string,
+  range: TimeRange,
+  lastPrice?: number,
+  opts?: { resolution?: HistoryResolution },
+): PricePoint[] {
+  const resolution: HistoryResolution = opts?.resolution ?? "full";
+  return alignHistoryToPrice(historyCache.get(cacheKey(symbol, range, resolution)) ?? [], lastPrice);
 }
 
 export function clearHistoryCache() {
@@ -395,7 +482,7 @@ export function changeFromPoints(
 
 /**
  * Quote change for UI: 1D uses live day change; other ranges use history
- * first→last (falls back to day change until history is cached).
+ * first→last (prefer full cache, fall back to spark; else day change).
  */
 export function quoteChangeForRange(
   symbol: string,
@@ -404,7 +491,9 @@ export function quoteChangeForRange(
 ): { change: number; changePercent: number } {
   const day = { change: stock.change, changePercent: stock.changePercent };
   if (range === "1D") return day;
-  return changeFromPoints(getHistory(symbol, range, stock.price), day);
+  const full = getHistory(symbol, range, stock.price);
+  if (full.length >= 2) return changeFromPoints(full, day);
+  return changeFromPoints(getHistory(symbol, range, stock.price, { resolution: "spark" }), day);
 }
 
 export async function searchStocks(query: string): Promise<SearchResult[]> {
@@ -422,11 +511,10 @@ export async function fetchStockNews(symbol: string, limit = 8): Promise<StockNe
   const qs = `limit=${encodeURIComponent(String(limit))}`;
   const path = `/api/news/${encodeURIComponent(sym)}?${qs}`;
 
-  // Prefer same-origin (Vite proxy / Vercel rewrite), then absolute Render URL.
   const urls = [
     apiUrl(path),
     `https://vantage-api-eni1.onrender.com${path}`,
-  ].filter((u, i, arr) => arr.indexOf(u) === i);
+  ].filter((u, i, arr) => u && arr.indexOf(u) === i);
 
   let lastErr: Error | null = null;
   for (const url of urls) {
@@ -438,18 +526,19 @@ export async function fetchStockNews(symbol: string, limit = 8): Promise<StockNe
       }
       const json = await res.json();
       const items = (json?.news ?? []) as StockNewsItem[];
-      const origin = API_BASE || (typeof window !== "undefined" ? window.location.origin : "");
       return items
-        .filter(item => item && typeof item.title === "string" && item.title.trim() && item.url)
+        .filter(item => item && typeof item.title === "string" && item.title.trim() && typeof item.url === "string")
         .map(item => {
-          const rawImage = item.image ?? null;
+          const rawImage = typeof item.image === "string" && item.image.startsWith("http") ? item.image : null;
           return {
-            ...item,
+            id: String(item.id || item.url),
             title: item.title.trim(),
+            url: item.url,
+            publisher: item.publisher || "Yahoo Finance",
+            publishedAt: item.publishedAt ?? null,
+            summary: item.summary ?? null,
             rawImage,
-            image: rawImage
-              ? `${origin}/api/img?u=${encodeURIComponent(rawImage)}`
-              : null,
+            image: rawImage,
           };
         });
     } catch (err) {
@@ -459,14 +548,16 @@ export async function fetchStockNews(symbol: string, limit = 8): Promise<StockNe
   throw lastErr ?? new Error("News fetch failed");
 }
 
-/** Prefetch common ranges for sparklines */
+/** Prefetch sparkline-resolution history for cards/list. */
 export async function prefetchSparklines(symbols: string[], range: TimeRange = "1D") {
   const concurrency = 4;
   let i = 0;
   async function worker() {
     while (i < symbols.length) {
       const idx = i++;
-      try { await fetchHistory(symbols[idx], range); } catch { /* ignore */ }
+      try {
+        await fetchHistory(symbols[idx], range, undefined, { resolution: "spark" });
+      } catch { /* ignore */ }
     }
   }
   await Promise.all(Array.from({ length: Math.min(concurrency, symbols.length) }, () => worker()));

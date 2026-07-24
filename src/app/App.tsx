@@ -12,7 +12,7 @@ import {
   STOCKS_META, ALL_SYMBOLS, getHistory, fetchQuotes, fetchHistory, ensureQuotes, mergeQuotes,
   lastQuotesFreshness,
   prefetchSparklines, searchStocks, fetchStockNews, alignHistoryToPrice, invalidateHistoryRange, clearHistoryCache,
-  quoteChangeForRange,
+  quoteChangeForRange, downsampleLTTB, sparklineMaxPoints,
   type StockMeta, type SearchResult, type StockNewsItem, type TimeRange,
 } from "./lib/stocks";
 import { loadUserState, saveUserState, subscribeAuth, signIn, signUp, signOut, deleteAccount, authErrorMessage, DEFAULT_PREFS, type UserState, type UserPrefs } from "./lib/firebase";
@@ -291,7 +291,11 @@ function ChartSkeleton({ height = 260, className = "" }: { height?: number; clas
 /** Live $/% change for the selected chart range (1D = day quote). */
 function useRangeChange(symbol: string, range: TimeRange, stock: StockMeta, refreshKey = 0) {
   const [delta, setDelta] = useState(() => quoteChangeForRange(symbol, range, stock));
-  const [loading, setLoading] = useState(() => range !== "1D" && getHistory(symbol, range, stock.price).length < 2);
+  const [loading, setLoading] = useState(() => {
+    if (range === "1D") return false;
+    return getHistory(symbol, range, stock.price).length < 2
+      && getHistory(symbol, range, stock.price, { resolution: "spark" }).length < 2;
+  });
   const stockRef = useRef(stock);
   stockRef.current = stock;
 
@@ -305,9 +309,9 @@ function useRangeChange(symbol: string, range: TimeRange, stock: StockMeta, refr
       return;
     }
 
-    // Hold previous delta + show loading until this range's history is ready
+    // Hold previous delta + show loading until spark history for this range is ready
     setLoading(true);
-    fetchHistory(symbol, range, s.price)
+    fetchHistory(symbol, range, s.price, { resolution: "spark" })
       .then(() => {
         if (cancelled) return;
         setDelta(quoteChangeForRange(symbol, range, stockRef.current));
@@ -343,18 +347,22 @@ const NAV_ITEMS: { id: AppPage; label: string }[] = [
 function MiniSparkline({ symbol, range, isGain, height = 52, lastPrice, refreshKey = 0 }: {
   symbol: string; range: TimeRange; isGain: boolean; height?: number; lastPrice?: number; refreshKey?: number;
 }) {
-  const [data, setData] = useState(() => getHistory(symbol, range, lastPrice));
-  const [loading, setLoading] = useState(() => getHistory(symbol, range, lastPrice).length < 2);
+  const [data, setData] = useState(() => getHistory(symbol, range, lastPrice, { resolution: "spark" }));
+  const [loading, setLoading] = useState(() => getHistory(symbol, range, lastPrice, { resolution: "spark" }).length < 2);
   const uid = useId();
   const gradId = `spark-${uid}`;
-  const seriesGain = data.length >= 2 ? data[data.length - 1].p >= data[0].p : isGain;
+  const chartData = useMemo(
+    () => downsampleLTTB(data, sparklineMaxPoints(range)),
+    [data, range],
+  );
+  const seriesGain = chartData.length >= 2 ? chartData[chartData.length - 1].p >= chartData[0].p : isGain;
   const color = seriesGain ? G : R;
-  const domain = useMemo(() => priceDomain(data), [data]);
+  const domain = useMemo(() => priceDomain(chartData), [chartData]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetchHistory(symbol, range, lastPrice).then(pts => {
+    fetchHistory(symbol, range, lastPrice, { resolution: "spark" }).then(pts => {
       if (cancelled) return;
       setData(pts);
       setLoading(false);
@@ -364,13 +372,13 @@ function MiniSparkline({ symbol, range, isGain, height = 52, lastPrice, refreshK
     return () => { cancelled = true; };
   }, [symbol, range, lastPrice, refreshKey]);
 
-  if (loading || data.length < 2) {
+  if (loading || chartData.length < 2) {
     return <ChartSkeleton height={height} className="rounded-md" />;
   }
 
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <AreaChart data={data} margin={{ top: 2, right: 0, bottom: 2, left: 0 }}>
+      <AreaChart data={chartData} margin={{ top: 2, right: 0, bottom: 2, left: 0 }}>
         <defs>
           <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
             <stop offset="5%"  stopColor={color} stopOpacity={0.18} />
@@ -2493,98 +2501,6 @@ function StockDetailView({
         <DetailChart symbol={stock.symbol} range={range} isGain={isGain} lastPrice={stock.price} />
       </div>
 
-      <div className="mx-5 mt-4 rounded-2xl border overflow-hidden" style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}>
-        <div className="px-5 py-3.5 border-b flex items-center justify-between gap-2" style={{ borderColor: "var(--v-line)" }}>
-          <div className="flex items-center gap-2">
-            <Newspaper size={12} style={{ color: "var(--v-ink-dim)" }} />
-            <div className="text-[9px] font-mono uppercase tracking-[0.15em]" style={{ color: "var(--v-ink-dim)" }}>
-              Live news
-            </div>
-          </div>
-          {newsStatus === "live" && (
-            <div className="text-[10px] font-mono" style={{ color: "var(--v-ink-dim)" }}>
-              {news.length} headline{news.length === 1 ? "" : "s"}
-            </div>
-          )}
-        </div>
-        {newsStatus === "loading" && (
-          <div className="flex flex-col gap-3 p-4">
-            {[0, 1, 2].map(i => (
-              <div key={i} className="flex gap-3 items-stretch">
-                <div className="h-16 w-24 rounded-lg flex-shrink-0 overflow-hidden">
-                  <TextSkeleton width="100%" height="100%" className="!block !w-full !h-full rounded-lg" />
-                </div>
-                <div className="flex-1 flex flex-col gap-2 py-1">
-                  <TextSkeleton width="92%" height="0.8rem" />
-                  <TextSkeleton width="70%" height="0.8rem" />
-                  <TextSkeleton width="40%" height="0.65rem" />
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-        {newsStatus === "error" && (
-          <div className="px-5 py-8 text-center text-sm font-mono" style={{ color: "var(--v-ink-dim)" }}>
-            News unavailable — try again in a moment
-          </div>
-        )}
-        {newsStatus === "empty" && (
-          <div className="px-5 py-8 text-center text-sm font-mono" style={{ color: "var(--v-ink-dim)" }}>
-            No recent headlines
-          </div>
-        )}
-        {newsStatus === "live" && (
-          <div className="flex flex-col">
-            {news.map((item, idx) => (
-              <a
-                key={item.id || `${item.url}-${idx}`}
-                href={item.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex gap-3 px-4 py-3.5 transition-colors hover:bg-white/5 border-b last:border-b-0"
-                style={{ borderColor: "var(--v-line)" }}
-              >
-                <div
-                  className="h-16 w-24 rounded-lg overflow-hidden flex-shrink-0 border"
-                  style={{ background: "var(--v-line)", borderColor: "var(--v-line-strong)" }}
-                >
-                  {item.image ? (
-                    <img
-                      src={item.image}
-                      alt=""
-                      className="w-full h-full object-cover"
-                      loading="lazy"
-                      referrerPolicy="no-referrer"
-                      onError={e => {
-                        const el = e.currentTarget;
-                        if (item.rawImage && el.src !== item.rawImage) {
-                          el.src = item.rawImage;
-                          return;
-                        }
-                        el.style.display = "none";
-                      }}
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center">
-                      <Newspaper size={18} style={{ color: "var(--v-ink-dim)" }} />
-                    </div>
-                  )}
-                </div>
-                <div className="min-w-0 flex-1 self-center">
-                  <div className="text-[13px] font-medium leading-snug" style={{ color: "var(--v-ink)" }}>
-                    {item.title}
-                  </div>
-                  <div className="mt-1.5 flex items-center gap-1.5 text-[11px] font-mono" style={{ color: "var(--v-ink-dim)" }}>
-                    <span className="truncate">{item.publisher || "Yahoo Finance"}</span>
-                    <ExternalLink size={10} className="flex-shrink-0 opacity-70" />
-                  </div>
-                </div>
-              </a>
-            ))}
-          </div>
-        )}
-      </div>
-
       <div className="mx-5 mt-4 rounded-2xl border p-5" style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}>
         <div className="text-[9px] font-mono uppercase tracking-[0.15em] mb-4" style={{ color: "var(--v-ink-dim)" }}>Today</div>
         <div className="grid grid-cols-3 sm:grid-cols-6 gap-x-6 gap-y-5">
@@ -2625,6 +2541,102 @@ function StockDetailView({
             <span className="text-[10px] font-mono" style={{ color: isGain ? G : R }}>▲ Current: {fmt$(stock.price)}</span>
           </div>
         </div>
+      </div>
+
+      <div
+        className="mx-5 mt-3 rounded-2xl border flex-shrink-0"
+        style={{ background: "var(--v-panel)", borderColor: "var(--v-line-strong)" }}
+        data-testid="stock-news"
+      >
+        <div className="px-5 py-3 border-b flex items-center justify-between gap-2" style={{ borderColor: "var(--v-line)" }}>
+          <div className="flex items-center gap-2">
+            <Newspaper size={14} style={{ color: G }} />
+            <div className="text-[11px] font-mono uppercase tracking-[0.12em] font-semibold" style={{ color: "var(--v-ink)" }}>
+              Live news
+            </div>
+          </div>
+          <div className="text-[10px] font-mono" style={{ color: "var(--v-ink-dim)" }}>
+            {newsStatus === "loading" ? "loading…"
+              : newsStatus === "live" ? `${news.length} headline${news.length === 1 ? "" : "s"}`
+              : newsStatus === "error" ? "unavailable"
+              : "none"}
+          </div>
+        </div>
+        {newsStatus === "loading" && (
+          <div className="flex flex-col gap-0">
+            {[0, 1, 2].map(i => (
+              <div key={i} className="flex gap-3 px-4 py-3 border-b last:border-b-0" style={{ borderColor: "var(--v-line)" }}>
+                <div
+                  className="h-16 w-24 rounded-lg flex-shrink-0"
+                  style={{ background: "var(--v-line-strong)" }}
+                />
+                <div className="flex-1 flex flex-col gap-2 justify-center">
+                  <div className="h-3 rounded" style={{ width: "90%", background: "var(--v-line-strong)" }} />
+                  <div className="h-3 rounded" style={{ width: "60%", background: "var(--v-line-strong)" }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {newsStatus === "error" && (
+          <div className="px-5 py-6 text-center text-sm font-mono" style={{ color: "var(--v-ink-dim)" }}>
+            News unavailable
+          </div>
+        )}
+        {newsStatus === "empty" && (
+          <div className="px-5 py-6 text-center text-sm font-mono" style={{ color: "var(--v-ink-dim)" }}>
+            No recent headlines
+          </div>
+        )}
+        {newsStatus === "live" && (
+          <div className="flex flex-col">
+            {news.map((item, idx) => (
+              <a
+                key={item.id || `${item.url}-${idx}`}
+                href={item.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex gap-3 px-4 py-3.5 transition-colors hover:bg-white/5 border-b last:border-b-0"
+                style={{ borderColor: "var(--v-line)" }}
+              >
+                <div
+                  className="h-16 w-24 rounded-lg overflow-hidden flex-shrink-0 border flex items-center justify-center"
+                  style={{ background: "var(--v-line)", borderColor: "var(--v-line-strong)" }}
+                >
+                  {item.image ? (
+                    <img
+                      src={item.image}
+                      alt=""
+                      className="w-full h-full object-cover"
+                      loading="lazy"
+                      referrerPolicy="no-referrer"
+                      onError={e => {
+                        const el = e.currentTarget;
+                        if (item.rawImage && el.dataset.fallback !== "1") {
+                          el.dataset.fallback = "1";
+                          el.src = item.rawImage;
+                          return;
+                        }
+                        el.style.visibility = "hidden";
+                      }}
+                    />
+                  ) : (
+                    <Newspaper size={18} style={{ color: "var(--v-ink-dim)" }} />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1 self-center">
+                  <div className="text-[13px] font-medium leading-snug" style={{ color: "var(--v-ink)" }}>
+                    {item.title}
+                  </div>
+                  <div className="mt-1.5 flex items-center gap-1.5 text-[11px] font-mono" style={{ color: "var(--v-ink-dim)" }}>
+                    <span className="truncate">{item.publisher || "Yahoo Finance"}</span>
+                    <ExternalLink size={10} className="flex-shrink-0 opacity-70" />
+                  </div>
+                </div>
+              </a>
+            ))}
+          </div>
+        )}
       </div>
 
       <div
