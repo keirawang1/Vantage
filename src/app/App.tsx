@@ -1466,12 +1466,12 @@ function WatchlistSidebar({
   return (
     <aside
       className={`flex flex-col flex-shrink-0 border-r overflow-hidden transition-[width,opacity] duration-200 ease-out ${
-        open ? "w-52 opacity-100" : "w-0 opacity-0 border-r-0 pointer-events-none"
+        open ? "w-40 sm:w-52 opacity-100" : "w-0 opacity-0 border-r-0 pointer-events-none"
       }`}
       style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}
       aria-hidden={!open}
     >
-      <div className="px-3 pt-4 pb-4 flex-1 overflow-y-auto w-52">
+      <div className="px-3 pt-4 pb-4 flex-1 overflow-y-auto w-40 sm:w-52">
         <div className="flex items-center justify-between px-2 mb-1.5">
           <div className="text-[9px] font-mono font-semibold tracking-[0.15em] uppercase" style={{ color: "var(--v-ink-dim)" }}>
             Watchlists
@@ -1827,13 +1827,13 @@ function Toolbar({
 
   return (
     <div
-      className="flex flex-wrap items-center gap-2.5 px-4 py-2 border-b sticky top-0 z-10 backdrop-blur-md"
+      className="flex flex-nowrap items-center gap-2.5 px-4 py-2 border-b sticky top-0 z-10 backdrop-blur-md overflow-x-auto no-scrollbar"
       style={{
         background:  "color-mix(in srgb, var(--v-panel) 85%, transparent)",
         borderColor: "var(--v-line)",
       }}
     >
-      <div ref={searchRef} className="relative flex-1 min-w-[16rem]">
+      <div ref={searchRef} className="relative flex-1 min-w-[12rem]">
         <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "var(--v-ink-dim)" }} />
         <input
           value={search}
@@ -2358,24 +2358,24 @@ function StockDetailView({
   return (
     <div className="flex flex-col h-full min-h-0 overflow-y-auto" style={{ scrollbarWidth: "thin", scrollbarColor: "var(--v-line-strong) transparent" }}>
       <div
-        className="sticky top-0 z-20 flex items-center flex-wrap gap-x-4 gap-y-2 px-5 py-3 border-b backdrop-blur-xl"
+        className="sticky top-0 z-20 flex items-center flex-nowrap gap-x-4 px-5 py-3 border-b backdrop-blur-xl overflow-x-auto no-scrollbar"
         style={{ background: "color-mix(in srgb, var(--v-bg) 92%, transparent)", borderColor: "var(--v-line)" }}
       >
         <button
-          className="flex items-center gap-1 text-xs transition-opacity hover:opacity-60"
+          className="flex items-center gap-1 text-xs transition-opacity hover:opacity-60 flex-shrink-0 whitespace-nowrap"
           style={{ color: "var(--v-ink-soft)" }}
           onClick={onBack}
         >
           <ChevronLeft size={14} />Back
         </button>
         <div className="w-px h-4 flex-shrink-0" style={{ background: "var(--v-line-strong)" }} />
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-shrink-0 whitespace-nowrap">
           <span className="font-mono text-base font-semibold tracking-wider" style={{ color: "var(--v-ink)" }}>{stock.symbol}</span>
           <span className="text-xs" style={{ color: "var(--v-ink-soft)" }}>{stock.name}</span>
         </div>
-        <div className="ml-auto flex items-center gap-3 flex-wrap justify-end">
+        <div className="ml-auto flex items-center gap-3 flex-nowrap justify-end flex-shrink-0">
           <button
-            className="px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-opacity hover:opacity-90"
+            className="px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-opacity hover:opacity-90 whitespace-nowrap"
             style={{ background: G, color: "#0a0a0a" }}
             onClick={() => setBuyOpen(true)}
           >
@@ -2677,7 +2677,7 @@ function MarketStrip({ stocks, status }: { stocks: StockMeta[]; status: "loading
     : "yfinance";
   return (
     <div
-      className="flex items-center gap-5 px-5 py-1.5 border-b overflow-x-auto"
+      className="flex items-center gap-5 px-5 py-1.5 border-b overflow-x-auto no-scrollbar"
       style={{ borderColor: "var(--v-line)", background: "var(--v-panel)" }}
     >
       {status === "loading" && indices.every(s => s.price <= 0) ? (
@@ -4225,15 +4225,15 @@ export default function App() {
     <div className="flex flex-col h-screen overflow-hidden" style={{ background: "var(--v-bg)", color: "var(--v-ink)" }}>
       {/* Header */}
       <header
-        className="flex-shrink-0 flex items-center gap-5 px-5 h-12 border-b z-50 backdrop-blur-xl"
+        className="flex-shrink-0 flex items-center gap-5 px-5 h-12 border-b z-50 backdrop-blur-xl overflow-x-auto no-scrollbar"
         style={{ background: "color-mix(in srgb, var(--v-panel) 92%, transparent)", borderColor: "var(--v-line)" }}
       >
         <div className="flex items-center gap-2.5 flex-shrink-0">
           <BarChart2 size={18} color={G} strokeWidth={2.5} />
-          <span className="font-mono text-[13px] font-semibold tracking-[0.18em]" style={{ color: "var(--v-ink)" }}>VANTAGE</span>
+          <span className="hidden sm:inline font-mono text-[13px] font-semibold tracking-[0.18em]" style={{ color: "var(--v-ink)" }}>VANTAGE</span>
         </div>
 
-        <nav className="flex items-stretch h-full gap-1">
+        <nav className="flex items-stretch h-full gap-1 flex-shrink-0">
           {NAV_ITEMS.map(item => {
             const active = page === item.id;
             return (
@@ -4255,15 +4255,15 @@ export default function App() {
           })}
         </nav>
 
-        <div className="flex-1" />
-        <div className="hidden sm:flex items-center gap-1.5 font-mono text-[11px]">
+        <div className="flex-1 min-w-4" />
+        <div className="hidden sm:flex items-center gap-1.5 font-mono text-[11px] flex-shrink-0 whitespace-nowrap">
           <span style={{ color: G }}>{gainCount}↑</span>
           <span style={{ color: "var(--v-ink-dim)" }}>/</span>
           <span style={{ color: R }}>{lossCount}↓</span>
           <span className="ml-1.5" style={{ color: "var(--v-ink-dim)" }}>All Stocks</span>
         </div>
         <button
-          className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white/10 transition-colors"
+          className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white/10 transition-colors flex-shrink-0"
           onClick={() => setTheme(t => t === "dark" ? "light" : "dark")}
         >
           {theme === "dark"
@@ -4379,7 +4379,7 @@ export default function App() {
                   <span>No shares owned yet</span>
                 </div>
               ) : viewMode === "grid" ? (
-                <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
+                <div className="grid gap-3 grid-cols-[repeat(2,minmax(10.5rem,1fr))] lg:grid-cols-[repeat(3,minmax(11rem,1fr))] xl:grid-cols-[repeat(4,minmax(11rem,1fr))] 2xl:grid-cols-[repeat(5,minmax(11rem,1fr))]">
                   {portfolioStocks.map(({ stock, holding }) => (
                     <StockCard key={stock.symbol} {...sharedCardProps(stock, holding)} />
                   ))}
@@ -4432,7 +4432,7 @@ export default function App() {
           <button
             type="button"
             onClick={() => setSidebarOpen(v => !v)}
-            className="flex-shrink-0 self-stretch w-6 flex items-center justify-center border-r z-20 transition-colors hover:bg-white/5"
+            className="flex-shrink-0 self-stretch w-4 flex items-center justify-center border-r z-20 transition-colors hover:bg-white/5"
             style={{
               background: "var(--v-panel)",
               borderColor: "var(--v-line)",
@@ -4443,8 +4443,8 @@ export default function App() {
             aria-expanded={sidebarOpen}
           >
             {sidebarOpen
-              ? <ChevronLeft size={14} />
-              : <ChevronRight size={14} />}
+              ? <ChevronLeft size={12} />
+              : <ChevronRight size={12} />}
           </button>
 
           <div className="flex-1 flex flex-col overflow-hidden min-w-0 min-h-0">
@@ -4489,7 +4489,7 @@ export default function App() {
                       <span>No stocks match your filters</span>
                     </div>
                   ) : viewMode === "grid" ? (
-                    <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
+                    <div className="grid gap-3 grid-cols-[repeat(2,minmax(10.5rem,1fr))] lg:grid-cols-[repeat(3,minmax(11rem,1fr))] xl:grid-cols-[repeat(4,minmax(11rem,1fr))] 2xl:grid-cols-[repeat(5,minmax(11rem,1fr))]">
                       {visibleStocks.map(stock => (
                         <StockCard key={stock.symbol} {...sharedCardProps(stock)} />
                       ))}

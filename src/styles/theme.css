@@ -314,3 +314,12 @@
   fill: var(--v-ink-soft);
   animation: v-pulse-soft 1.2s ease-in-out infinite;
 }
+
+/* Horizontal top bars: scrollable, no visible scrollbar */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
