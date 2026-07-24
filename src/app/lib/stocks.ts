@@ -44,6 +44,16 @@ export interface SearchResult {
   type?: string;
 }
 
+export interface StockNewsItem {
+  id: string;
+  title: string;
+  url: string;
+  publisher: string;
+  publishedAt?: string | null;
+  image?: string | null;
+  summary?: string | null;
+}
+
 export type TimeRange =
   | "1D" | "1W" | "1M" | "3M" | "6M" | "YTD"
   | "1Y" | "2Y" | "5Y" | "10Y" | "ALL";
@@ -129,7 +139,7 @@ export let lastQuotesFreshness: QuotesFreshness =
 
 const historyCache = new Map<string, PricePoint[]>();
 const historyInflight = new Map<string, Promise<PricePoint[]>>();
-const HISTORY_VERSION = 2;
+const HISTORY_VERSION = 3;
 
 function cacheKey(symbol: string, range: TimeRange) {
   return `${HISTORY_VERSION}:${symbol}:${range}`;
@@ -322,7 +332,10 @@ export async function ensureQuotes(symbols: string[]): Promise<StockMeta[]> {
 export async function fetchHistory(symbol: string, range: TimeRange, lastPrice?: number): Promise<PricePoint[]> {
   const key = cacheKey(symbol, range);
   const cached = historyCache.get(key);
-  if (cached) return alignHistoryToPrice(cached, lastPrice);
+  // Prefer cache only when points include volume
+  if (cached?.length && cached.some(p => typeof p.v === "number")) {
+    return alignHistoryToPrice(cached, lastPrice);
+  }
 
   const inflight = historyInflight.get(key);
   if (inflight) {
@@ -336,9 +349,13 @@ export async function fetchHistory(symbol: string, range: TimeRange, lastPrice?:
     );
     if (!res.ok) throw new Error(`History fetch failed (${res.status})`);
     const json = await res.json();
-    let points: PricePoint[] = (json?.points ?? []).filter(
-      (p: PricePoint) => Number.isFinite(p.t) && Number.isFinite(p.p)
-    );
+    let points: PricePoint[] = (json?.points ?? [])
+      .filter((p: PricePoint) => Number.isFinite(p.t) && Number.isFinite(p.p))
+      .map((p: PricePoint) => ({
+        t: Number(p.t),
+        p: Number(p.p),
+        v: typeof p.v === "number" && Number.isFinite(p.v) ? p.v : 0,
+      }));
     const apiLast = typeof json?.lastPrice === "number" ? json.lastPrice : undefined;
     points = alignHistoryToPrice(points, apiLast);
     if (points.length) historyCache.set(key, points);
@@ -395,6 +412,17 @@ export async function searchStocks(query: string): Promise<SearchResult[]> {
   if (!res.ok) throw new Error(`Search failed (${res.status})`);
   const json = await res.json();
   return (json?.results ?? []) as SearchResult[];
+}
+
+export async function fetchStockNews(symbol: string, limit = 8): Promise<StockNewsItem[]> {
+  const sym = symbol.trim();
+  if (!sym) return [];
+  const res = await fetch(
+    apiUrl(`/api/news/${encodeURIComponent(sym)}?limit=${encodeURIComponent(String(limit))}`)
+  );
+  if (!res.ok) throw new Error(`News fetch failed (${res.status})`);
+  const json = await res.json();
+  return (json?.news ?? []) as StockNewsItem[];
 }
 
 /** Prefetch common ranges for sparklines */

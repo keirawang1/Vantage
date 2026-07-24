@@ -82,6 +82,7 @@ HISTORY_TTL = {
     "ALL": 3600.0,
 }
 SEARCH_TTL = 300.0
+NEWS_TTL = 300.0
 
 
 def _cache_load() -> None:
@@ -530,6 +531,119 @@ def search(q: str = Query(..., min_length=1, max_length=MAX_SEARCH_LEN)):
         })
     out = {"results": results[:10]}
     _cache_put(cache_key, out)
+    return out
+
+
+def _news_thumb(content: dict[str, Any]) -> str | None:
+    thumb = content.get("thumbnail")
+    if not isinstance(thumb, dict):
+        return None
+    resolutions = thumb.get("resolutions")
+    if isinstance(resolutions, list) and resolutions:
+        for pref in ("640x800", "170x128", "original"):
+            for r in resolutions:
+                if isinstance(r, dict) and r.get("tag") == pref and r.get("url"):
+                    return str(r["url"])
+        for r in resolutions:
+            if isinstance(r, dict) and r.get("url"):
+                return str(r["url"])
+    url = thumb.get("originalUrl") or thumb.get("url")
+    return str(url) if url else None
+
+
+def _parse_news_item(item: Any) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+
+    # Newer yfinance shape: { id, content: { title, thumbnail, clickThroughUrl, ... } }
+    content = item.get("content") if isinstance(item.get("content"), dict) else None
+    if content:
+        title = str(content.get("title") or "").strip()
+        if not title:
+            return None
+        link = ""
+        for key in ("clickThroughUrl", "canonicalUrl"):
+            u = content.get(key)
+            if isinstance(u, dict) and u.get("url"):
+                link = str(u["url"])
+                break
+            if isinstance(u, str) and u.startswith("http"):
+                link = u
+                break
+        if not link:
+            return None
+        provider = content.get("provider") if isinstance(content.get("provider"), dict) else {}
+        pub = content.get("pubDate") or content.get("displayTime") or ""
+        return {
+            "id": str(item.get("id") or content.get("id") or link),
+            "title": title,
+            "url": link,
+            "publisher": str(provider.get("displayName") or "Yahoo Finance"),
+            "publishedAt": str(pub) if pub else None,
+            "image": _news_thumb(content),
+            "summary": str(content.get("summary") or content.get("description") or "") or None,
+        }
+
+    # Legacy flat shape
+    title = str(item.get("title") or "").strip()
+    link = str(item.get("link") or item.get("url") or "").strip()
+    if not title or not link.startswith("http"):
+        return None
+    image = None
+    thumb = item.get("thumbnail")
+    if isinstance(thumb, dict):
+        resolutions = thumb.get("resolutions")
+        if isinstance(resolutions, list):
+            for r in resolutions:
+                if isinstance(r, dict) and r.get("url"):
+                    image = str(r["url"])
+                    break
+    return {
+        "id": str(item.get("uuid") or item.get("id") or link),
+        "title": title,
+        "url": link,
+        "publisher": str(item.get("publisher") or "Yahoo Finance"),
+        "publishedAt": str(item.get("providerPublishTime") or item.get("pubDate") or "") or None,
+        "image": image,
+        "summary": str(item.get("summary") or "") or None,
+    }
+
+
+@app.get("/api/news/{symbol}")
+def news(symbol: str, limit: int = Query(8, ge=1, le=20)):
+    sym = _normalize_symbol(symbol)
+    cache_key = f"n:{sym}:{limit}"
+    cached, fresh = _cache_get(cache_key, NEWS_TTL)
+    if cached is not None and fresh:
+        return cached
+
+    try:
+        raw = yf.Ticker(sym).news or []
+    except Exception:
+        if cached is not None:
+            out = dict(cached) if isinstance(cached, dict) else {"symbol": sym, "news": [], "stale": True}
+            if isinstance(out, dict):
+                out["stale"] = True
+            return out
+        raise HTTPException(502, "upstream news error")
+
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in raw:
+        parsed = _parse_news_item(entry)
+        if not parsed:
+            continue
+        key = parsed["url"]
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(parsed)
+        if len(items) >= limit:
+            break
+
+    out = {"symbol": sym, "news": items, "stale": False}
+    if items:
+        _cache_put(cache_key, out)
     return out
 
 

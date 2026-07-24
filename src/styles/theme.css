@@ -245,3 +245,72 @@
     line-height: 1.5;
   }
 }
+
+/* ─── Loading animations ───────────────────────────────────────────────────── */
+
+@keyframes v-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+@keyframes v-chart-draw {
+  0% { stroke-dashoffset: 240; opacity: 0.35; }
+  45% { opacity: 0.9; }
+  100% { stroke-dashoffset: 0; opacity: 0.55; }
+}
+
+@keyframes v-chart-glow {
+  0%, 100% { opacity: 0.15; }
+  50% { opacity: 0.4; }
+}
+
+@keyframes v-pulse-soft {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+.v-skeleton {
+  display: inline-block;
+  border-radius: 6px;
+  background: linear-gradient(
+    105deg,
+    color-mix(in srgb, var(--v-line-strong) 55%, transparent) 0%,
+    color-mix(in srgb, var(--v-ink-dim) 22%, transparent) 45%,
+    color-mix(in srgb, var(--v-line-strong) 55%, transparent) 90%
+  );
+  background-size: 200% 100%;
+  animation: v-shimmer 1.35s ease-in-out infinite;
+  vertical-align: middle;
+}
+
+.v-chart-loader {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--v-line) 70%, transparent);
+}
+
+.v-chart-loader svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.v-chart-loader .v-chart-path {
+  fill: none;
+  stroke: var(--v-ink-dim);
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 240;
+  animation: v-chart-draw 1.8s ease-in-out infinite;
+}
+
+.v-chart-loader .v-chart-fill {
+  animation: v-chart-glow 1.8s ease-in-out infinite;
+}
+
+.v-chart-loader .v-chart-dot {
+  fill: var(--v-ink-soft);
+  animation: v-pulse-soft 1.2s ease-in-out infinite;
+}

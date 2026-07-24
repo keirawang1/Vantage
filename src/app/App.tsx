@@ -6,14 +6,14 @@ import {
   Search, Sun, Moon, Plus, ChevronLeft, ChevronRight, ChevronDown, Filter, ArrowUpDown,
   X, Check, TrendingUp, TrendingDown, Star, BarChart2, Minus,
   MoreHorizontal, LayoutGrid, List, Landmark, Wallet, Settings,
-  Eye, EyeOff, User as UserIcon,
+  Eye, EyeOff, User as UserIcon, ExternalLink, Newspaper,
 } from "lucide-react";
 import {
   STOCKS_META, ALL_SYMBOLS, getHistory, fetchQuotes, fetchHistory, ensureQuotes, mergeQuotes,
   lastQuotesFreshness,
-  prefetchSparklines, searchStocks, alignHistoryToPrice, invalidateHistoryRange, clearHistoryCache,
+  prefetchSparklines, searchStocks, fetchStockNews, alignHistoryToPrice, invalidateHistoryRange, clearHistoryCache,
   quoteChangeForRange,
-  type StockMeta, type SearchResult, type TimeRange,
+  type StockMeta, type SearchResult, type StockNewsItem, type TimeRange,
 } from "./lib/stocks";
 import { loadUserState, saveUserState, subscribeAuth, signIn, signUp, signOut, deleteAccount, authErrorMessage, DEFAULT_PREFS, type UserState, type UserPrefs } from "./lib/firebase";
 import type { User } from "firebase/auth";
@@ -237,26 +237,98 @@ function ProfileAvatar({ pic, size, className = "" }: { pic: string; size: numbe
   );
 }
 
+/** Shimmer bar for text / numeric placeholders */
+function TextSkeleton({
+  width = "4rem", height = "0.75rem", className = "", rounded = "rounded-md",
+}: {
+  width?: string | number;
+  height?: string | number;
+  className?: string;
+  rounded?: string;
+}) {
+  return (
+    <span
+      className={`v-skeleton ${rounded} ${className}`}
+      style={{ width, height }}
+      aria-hidden
+    />
+  );
+}
+
+/** Animated chart wave loader */
+function ChartSkeleton({ height = 260, className = "" }: { height?: number; className?: string }) {
+  const uid = useId();
+  const fillId = `chart-skel-fill-${uid}`;
+  return (
+    <div
+      className={`v-chart-loader flex items-center justify-center ${className}`}
+      style={{ height }}
+      role="status"
+      aria-label="Loading chart"
+    >
+      <svg viewBox="0 0 320 120" preserveAspectRatio="none" aria-hidden>
+        <defs>
+          <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--v-ink-dim)" stopOpacity="0.22" />
+            <stop offset="100%" stopColor="var(--v-ink-dim)" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <path
+          className="v-chart-fill"
+          d="M8 88 C 40 86, 52 40, 80 48 S 120 96, 150 70 S 200 20, 230 36 S 280 90, 312 58 L 312 120 L 8 120 Z"
+          fill={`url(#${fillId})`}
+        />
+        <path
+          className="v-chart-path"
+          d="M8 88 C 40 86, 52 40, 80 48 S 120 96, 150 70 S 200 20, 230 36 S 280 90, 312 58"
+        />
+        <circle className="v-chart-dot" cx="312" cy="58" r="3.5" />
+      </svg>
+    </div>
+  );
+}
+
 /** Live $/% change for the selected chart range (1D = day quote). */
 function useRangeChange(symbol: string, range: TimeRange, stock: StockMeta, refreshKey = 0) {
   const [delta, setDelta] = useState(() => quoteChangeForRange(symbol, range, stock));
+  const [loading, setLoading] = useState(() => range !== "1D" && getHistory(symbol, range, stock.price).length < 2);
+  const stockRef = useRef(stock);
+  stockRef.current = stock;
 
   useEffect(() => {
+    let cancelled = false;
+    const s = stockRef.current;
+
     if (range === "1D") {
-      setDelta({ change: stock.change, changePercent: stock.changePercent });
+      setDelta({ change: s.change, changePercent: s.changePercent });
+      setLoading(false);
       return;
     }
-    setDelta(quoteChangeForRange(symbol, range, stock));
-    let cancelled = false;
-    fetchHistory(symbol, range, stock.price)
-      .then(() => {
-        if (!cancelled) setDelta(quoteChangeForRange(symbol, range, stock));
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [symbol, range, stock.change, stock.changePercent, stock.price, refreshKey]);
 
-  return delta;
+    // Hold previous delta + show loading until this range's history is ready
+    setLoading(true);
+    fetchHistory(symbol, range, s.price)
+      .then(() => {
+        if (cancelled) return;
+        setDelta(quoteChangeForRange(symbol, range, stockRef.current));
+        setLoading(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setDelta(quoteChangeForRange(symbol, range, stockRef.current));
+        setLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [symbol, range, refreshKey]);
+
+  // Keep 1D day-change in sync when quote updates (without flashing loaders)
+  useEffect(() => {
+    if (range !== "1D") return;
+    setDelta({ change: stock.change, changePercent: stock.changePercent });
+  }, [range, stock.change, stock.changePercent]);
+
+  return { change: delta.change, changePercent: delta.changePercent, loading };
 }
 
 const NAV_ITEMS: { id: AppPage; label: string }[] = [
@@ -272,6 +344,7 @@ function MiniSparkline({ symbol, range, isGain, height = 52, lastPrice, refreshK
   symbol: string; range: TimeRange; isGain: boolean; height?: number; lastPrice?: number; refreshKey?: number;
 }) {
   const [data, setData] = useState(() => getHistory(symbol, range, lastPrice));
+  const [loading, setLoading] = useState(() => getHistory(symbol, range, lastPrice).length < 2);
   const uid = useId();
   const gradId = `spark-${uid}`;
   const seriesGain = data.length >= 2 ? data[data.length - 1].p >= data[0].p : isGain;
@@ -279,21 +352,20 @@ function MiniSparkline({ symbol, range, isGain, height = 52, lastPrice, refreshK
   const domain = useMemo(() => priceDomain(data), [data]);
 
   useEffect(() => {
-    setData(prev => alignHistoryToPrice(prev.length ? prev : getHistory(symbol, range), lastPrice));
-  }, [symbol, range, lastPrice]);
-
-  useEffect(() => {
     let cancelled = false;
-    const cached = getHistory(symbol, range, lastPrice);
-    if (cached.length) setData(cached);
+    setLoading(true);
     fetchHistory(symbol, range, lastPrice).then(pts => {
-      if (!cancelled) setData(pts);
-    }).catch(() => { /* keep cached / empty */ });
+      if (cancelled) return;
+      setData(pts);
+      setLoading(false);
+    }).catch(() => {
+      if (!cancelled) setLoading(false);
+    });
     return () => { cancelled = true; };
   }, [symbol, range, lastPrice, refreshKey]);
 
-  if (data.length < 2) {
-    return <div style={{ height }} className="opacity-30" />;
+  if (loading || data.length < 2) {
+    return <ChartSkeleton height={height} className="rounded-md" />;
   }
 
   return (
@@ -585,13 +657,37 @@ function SearchDropdown({
       onMouseDown={e => e.preventDefault()}
     >
       <div
-        className="px-3 py-2 text-[10px] font-mono uppercase tracking-widest border-b rounded-t-2xl"
+        className="px-3 py-2 text-[10px] font-mono uppercase tracking-widest border-b rounded-t-2xl flex items-center gap-2"
         style={{ color: "var(--v-ink-dim)", borderColor: "var(--v-line)" }}
       >
-        {loading && results.length === 0 ? "Searching…" : `${results.length} result${results.length !== 1 ? "s" : ""}`}
+        {loading && results.length === 0 ? (
+          <>
+            <TextSkeleton width="4.5rem" height="0.55rem" />
+          </>
+        ) : (
+          `${results.length} result${results.length !== 1 ? "s" : ""}`
+        )}
       </div>
       <div className="rounded-b-2xl overflow-visible">
-      {results.map((stock, idx) => {
+      {loading && results.length === 0 ? (
+        Array.from({ length: 4 }).map((_, i) => (
+          <div
+            key={i}
+            className={`flex items-center gap-3 px-3 py-2.5 border-b ${i === 3 ? "border-0 rounded-b-2xl" : ""}`}
+            style={{ borderColor: "var(--v-line)" }}
+          >
+            <TextSkeleton width={24} height={24} rounded="rounded-lg" />
+            <div className="flex-1 flex flex-col gap-1.5 min-w-0">
+              <TextSkeleton width="3.5rem" height="0.7rem" />
+              <TextSkeleton width="8rem" height="0.55rem" />
+            </div>
+            <div className="flex flex-col items-end gap-1.5">
+              <TextSkeleton width="3.25rem" height="0.7rem" />
+              <TextSkeleton width="2.5rem" height="0.55rem" />
+            </div>
+          </div>
+        ))
+      ) : results.map((stock, idx) => {
         const isGain = stock.changePercent >= 0;
         const inAnyList = watchlists.some(w => w.symbols.includes(stock.symbol));
         const isLast = idx === results.length - 1;
@@ -650,15 +746,24 @@ function SearchDropdown({
               </div>
 
               <div className="flex-shrink-0 text-right">
-                <div className="font-mono text-[12px] font-semibold" style={{ color: "var(--v-ink)" }}>
-                  {stock.price > 0 ? fmt$(stock.price) : "—"}
-                </div>
-                <div
-                  className="text-[10px] font-mono font-medium"
-                  style={{ color: stock.price > 0 ? (isGain ? G : R) : "var(--v-ink-dim)" }}
-                >
-                  {stock.price > 0 ? fmtPct(stock.changePercent) : ""}
-                </div>
+                {stock.price > 0 ? (
+                  <>
+                    <div className="font-mono text-[12px] font-semibold" style={{ color: "var(--v-ink)" }}>
+                      {fmt$(stock.price)}
+                    </div>
+                    <div
+                      className="text-[10px] font-mono font-medium"
+                      style={{ color: isGain ? G : R }}
+                    >
+                      {fmtPct(stock.changePercent)}
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex flex-col items-end gap-1">
+                    <TextSkeleton width="3.25rem" height="0.7rem" />
+                    <TextSkeleton width="2.5rem" height="0.55rem" />
+                  </div>
+                )}
               </div>
             </button>
           </div>
@@ -754,15 +859,28 @@ function StockCard({
       </div>
 
       <div className="flex items-center gap-2 flex-wrap">
-        <span className="font-mono text-[18px] font-semibold leading-none" style={{ color: "var(--v-ink)" }}>
-          {fmt$(stock.price)}
-        </span>
-        <span
-          className="text-[11px] font-mono font-medium px-1.5 py-0.5 rounded-md"
-          style={{ color: isGain ? G : R, background: isGain ? "rgba(52,211,153,0.1)" : "rgba(248,113,130,0.1)" }}
-        >
-          {changeDisplay === "amount" ? fmtChangeAmt(delta.change) : fmtPct(delta.changePercent)}
-        </span>
+        {stock.price > 0 ? (
+          <>
+            <span className="font-mono text-[18px] font-semibold leading-none" style={{ color: "var(--v-ink)" }}>
+              {fmt$(stock.price)}
+            </span>
+            {delta.loading ? (
+              <TextSkeleton width="2.75rem" height="1.1rem" rounded="rounded-md" />
+            ) : (
+              <span
+                className="text-[11px] font-mono font-medium px-1.5 py-0.5 rounded-md"
+                style={{ color: isGain ? G : R, background: isGain ? "rgba(52,211,153,0.1)" : "rgba(248,113,130,0.1)" }}
+              >
+                {changeDisplay === "amount" ? fmtChangeAmt(delta.change) : fmtPct(delta.changePercent)}
+              </span>
+            )}
+          </>
+        ) : (
+          <>
+            <TextSkeleton width="4.5rem" height="1.1rem" />
+            <TextSkeleton width="2.75rem" height="1.1rem" rounded="rounded-md" />
+          </>
+        )}
       </div>
 
       {holding ? (
@@ -811,11 +929,11 @@ const LR = {
   chart:  "w-36 sm:w-44 flex-shrink-0 min-w-0 text-left",
   price:  "w-[4.75rem] flex-shrink-0 text-left tabular-nums",
   change: "w-[4.5rem] flex-shrink-0 text-left",
-  volume: "w-[4.5rem] flex-shrink-0 text-left tabular-nums",
-  cap:    "w-[4.75rem] flex-shrink-0 text-left tabular-nums",
-  open:   "w-[4.75rem] flex-shrink-0 text-left tabular-nums",
-  high:   "w-[4.75rem] flex-shrink-0 text-left tabular-nums",
-  low:    "w-[4.75rem] flex-shrink-0 text-left tabular-nums",
+  volume: "w-[4.25rem] flex-shrink-0 text-left tabular-nums",
+  cap:    "w-[4.25rem] flex-shrink-0 text-left tabular-nums",
+  open:   "w-[4.25rem] flex-shrink-0 text-left tabular-nums",
+  high:   "w-[4.25rem] flex-shrink-0 text-left tabular-nums",
+  low:    "w-[4.25rem] flex-shrink-0 text-left tabular-nums",
   menu:   "w-6 flex-shrink-0",
 } as const;
 
@@ -832,7 +950,7 @@ function ListCols(props: {
 }) {
   const { symbol, chart, price, change, volume, cap, open, high, low } = props;
   return (
-    <div className="flex items-center flex-1 min-w-[52rem]">
+    <div className="flex items-center flex-1 min-w-[44rem]">
       <div className={LR.symbol}>{symbol}</div>
 
       <div className="w-6 sm:w-10 flex-shrink-0" aria-hidden />
@@ -846,22 +964,15 @@ function ListCols(props: {
         <div className={LR.change}>{change}</div>
       </div>
 
-      <div className="w-5 sm:w-8 flex-shrink-0" aria-hidden />
+      <div className="w-4 sm:w-6 flex-shrink-0" aria-hidden />
 
-      <div className="flex items-center gap-5 flex-shrink-0">
+      <div className="flex items-center gap-3 flex-shrink-0">
         <div className={LR.volume}>{volume}</div>
         <div className={LR.cap}>{cap}</div>
-      </div>
-
-      <div className="w-6 sm:w-10 lg:w-14 flex-shrink-0" aria-hidden />
-
-      <div className="flex items-center gap-5 flex-shrink-0">
         <div className={LR.open}>{open}</div>
         <div className={LR.high}>{high}</div>
         <div className={LR.low}>{low}</div>
       </div>
-
-      <div className="flex-1 min-w-[0.5rem]" aria-hidden />
     </div>
   );
 }
@@ -902,7 +1013,7 @@ function ListHeader({
 
   return (
     <div
-      className={`flex items-center gap-3 ${LR.pad} pb-1.5 mb-1 text-[9px] font-mono uppercase tracking-widest min-w-[52rem]`}
+      className={`flex items-center gap-3 ${LR.pad} pb-1.5 mb-1 text-[9px] font-mono uppercase tracking-widest min-w-[44rem]`}
       style={{ color: "var(--v-ink-dim)" }}
     >
       <ListCols
@@ -943,7 +1054,7 @@ function StockRow({
 
   return (
     <div
-      className={`group flex items-center gap-3 ${LR.pad} py-3 rounded-xl border transition-all duration-150 min-w-[52rem]`}
+      className={`group flex items-center gap-3 ${LR.pad} py-3 rounded-xl border transition-all duration-150 min-w-[44rem]`}
       style={{
         background:  "var(--v-panel)",
         borderColor: isDragOver ? "var(--v-ink-soft)" : isPinned ? "rgba(52,211,153,0.35)" : "var(--v-line)",
@@ -968,44 +1079,58 @@ function StockRow({
             <div className="text-[11px] truncate" style={{ color: "var(--v-ink-dim)" }}>{stock.name}</div>
           </>
         )}
-        chart={<MiniSparkline symbol={stock.symbol} range={range} isGain={isGain} height={44} lastPrice={stock.price} refreshKey={refreshKey} />}
-        price={(
+        chart={<MiniSparkline symbol={stock.symbol} range={range} isGain={isGain} height={44} lastPrice={stock.price > 0 ? stock.price : undefined} refreshKey={refreshKey} />}
+        price={stock.price > 0 ? (
           <span className="font-mono text-[14px] font-semibold truncate" style={{ color: "var(--v-ink)" }}>
             {fmt$(stock.price)}
           </span>
+        ) : (
+          <TextSkeleton width="3.5rem" height="0.85rem" />
         )}
-        change={(
+        change={stock.price > 0 && !delta.loading ? (
           <span
             className="flex w-fit items-center text-[11px] font-mono font-medium px-1.5 py-0.5 rounded-md truncate max-w-full"
             style={{ color: isGain ? G : R, background: isGain ? "rgba(52,211,153,0.1)" : "rgba(248,113,130,0.1)" }}
           >
             {changeDisplay === "amount" ? fmtChangeAmt(delta.change) : fmtPct(delta.changePercent)}
           </span>
+        ) : (
+          <TextSkeleton width="2.75rem" height="1.1rem" rounded="rounded-md" />
         )}
-        volume={(
+        volume={stock.volume > 0 ? (
           <span className="font-mono text-[11px] truncate" style={{ color: "var(--v-ink-dim)" }}>
             {fmtVol(stock.volume)}
           </span>
+        ) : (
+          <TextSkeleton width="2.5rem" height="0.65rem" />
         )}
-        cap={(
+        cap={stock.marketCap > 0 ? (
           <span className="font-mono text-[11px] truncate" style={{ color: "var(--v-ink-dim)" }}>
             {fmtCap(stock.marketCap)}
           </span>
+        ) : (
+          <TextSkeleton width="2.75rem" height="0.65rem" />
         )}
-        open={(
+        open={stock.open > 0 ? (
           <span className="font-mono text-[11px] truncate" style={{ color: "var(--v-ink-dim)" }}>
             {fmt$(stock.open)}
           </span>
+        ) : (
+          <TextSkeleton width="2.75rem" height="0.65rem" />
         )}
-        high={(
+        high={stock.dayHigh > 0 ? (
           <span className="font-mono text-[11px] truncate" style={{ color: "var(--v-ink-dim)" }}>
             {fmt$(stock.dayHigh)}
           </span>
+        ) : (
+          <TextSkeleton width="2.75rem" height="0.65rem" />
         )}
-        low={(
+        low={stock.dayLow > 0 ? (
           <span className="font-mono text-[11px] truncate" style={{ color: "var(--v-ink-dim)" }}>
             {fmt$(stock.dayLow)}
           </span>
+        ) : (
+          <TextSkeleton width="2.75rem" height="0.65rem" />
         )}
       />
 
@@ -1169,18 +1294,22 @@ function HoldingRow({
             <div className="text-[11px] truncate" style={{ color: "var(--v-ink-dim)" }}>{stock.name}</div>
           </>
         )}
-        price={(
+        price={stock.price > 0 ? (
           <span className="font-mono text-[14px] font-semibold truncate" style={{ color: "var(--v-ink)" }}>
             {fmt$(stock.price)}
           </span>
+        ) : (
+          <TextSkeleton width="3.5rem" height="0.85rem" />
         )}
-        change={(
+        change={stock.price > 0 && !delta.loading ? (
           <span
             className="flex w-fit items-center text-[11px] font-mono font-medium px-1.5 py-0.5 rounded-md truncate max-w-full"
             style={{ color: isGain ? G : R, background: isGain ? "rgba(52,211,153,0.1)" : "rgba(248,113,130,0.1)" }}
           >
             {changeDisplay === "amount" ? fmtChangeAmt(delta.change) : fmtPct(delta.changePercent)}
           </span>
+        ) : (
+          <TextSkeleton width="2.75rem" height="1.1rem" rounded="rounded-md" />
         )}
         shares={(
           <span className="font-mono text-[11px] truncate" style={{ color: "var(--v-ink-dim)" }}>
@@ -1192,7 +1321,7 @@ function HoldingRow({
             {fmt$(holding.avgCost)}
           </span>
         )}
-        profit={(
+        profit={stock.price > 0 ? (
           <span
             className="font-mono text-[11px] truncate"
             style={{ color: profit >= 0 ? G : R }}
@@ -1201,11 +1330,15 @@ function HoldingRow({
               ? `${profit >= 0 ? "+" : ""}${fmt$(profit)}`
               : fmtPct(profitPct)}
           </span>
+        ) : (
+          <TextSkeleton width="2.75rem" height="0.65rem" />
         )}
-        value={(
+        value={stock.price > 0 ? (
           <span className="font-mono text-[11px] truncate" style={{ color: "var(--v-ink)" }}>
             {fmt$(value)}
           </span>
+        ) : (
+          <TextSkeleton width="3rem" height="0.65rem" />
         )}
       />
 
@@ -1791,13 +1924,7 @@ function DetailChart({ symbol, range, isGain, lastPrice }: { symbol: string; ran
 
   useEffect(() => {
     let cancelled = false;
-    const cached = getHistory(symbol, range, lastPrice);
-    if (cached.length >= 2) {
-      setData(cached);
-      setLoading(false);
-    } else {
-      setLoading(true);
-    }
+    setLoading(true);
     fetchHistory(symbol, range, lastPrice)
       .then(pts => {
         if (!cancelled) { setData(pts); setLoading(false); }
@@ -1807,7 +1934,10 @@ function DetailChart({ symbol, range, isGain, lastPrice }: { symbol: string; ran
   }, [symbol, range, lastPrice]);
 
   // Plot by index (not timestamp) so overnight/weekend gaps don't render as long straight lines
-  const indexed = useMemo(() => data.map((d, i) => ({ ...d, i })), [data]);
+  const indexed = useMemo(
+    () => data.map((d, i) => ({ t: d.t, p: d.p, v: typeof d.v === "number" ? d.v : 0, i })),
+    [data],
+  );
   const seriesGain = data.length >= 2 ? data[data.length - 1].p >= data[0].p : isGain;
   const color = seriesGain ? G : R;
   const domain = useMemo(() => priceDomain(data), [data]);
@@ -1828,12 +1958,8 @@ function DetailChart({ symbol, range, isGain, lastPrice }: { symbol: string; ran
     return [lo, lo + (hi - lo) / 3, lo + (2 * (hi - lo)) / 3, hi];
   }, [domain]);
 
-  if (loading && data.length < 2) {
-    return (
-      <div className="h-[260px] flex items-center justify-center font-mono text-xs" style={{ color: "var(--v-ink-dim)" }}>
-        Loading chart…
-      </div>
-    );
+  if (loading) {
+    return <ChartSkeleton height={260} />;
   }
 
   if (data.length < 2) {
@@ -1882,18 +2008,21 @@ function DetailChart({ symbol, range, isGain, lastPrice }: { symbol: string; ran
         />
         <Tooltip
           content={({ active, payload }) => {
-            if (!active || !payload?.[0]) return null;
-            const { t, p, v } = payload[0].payload as { t: number; p: number; v?: number };
+            if (!active || !payload?.length) return null;
+            const row = (payload.find(p => p.payload)?.payload ?? payload[0].payload) as {
+              t: number; p: number; v?: number;
+            };
+            const vol = typeof row.v === "number" ? row.v : 0;
             return (
               <div
                 className="px-2.5 py-2 rounded-xl border text-xs font-mono shadow-xl"
                 style={{ background: "var(--v-panel)", borderColor: "var(--v-line-strong)", color: "var(--v-ink)" }}
               >
-                <div className="mb-0.5" style={{ color: "var(--v-ink-dim)" }}>{fmtTime(t, range)}</div>
-                <div className="font-semibold">{fmt$(p)}</div>
-                {v != null && v > 0 && (
-                  <div className="mt-0.5" style={{ color: "var(--v-ink-dim)" }}>Vol {fmtVol(v)}</div>
-                )}
+                <div className="mb-0.5" style={{ color: "var(--v-ink-dim)" }}>{fmtTime(row.t, range)}</div>
+                <div className="font-semibold">{fmt$(row.p)}</div>
+                <div className="mt-0.5" style={{ color: "var(--v-ink-dim)" }}>
+                  Vol {vol > 0 ? fmtVol(vol) : "—"}
+                </div>
               </div>
             );
           }}
@@ -2173,7 +2302,7 @@ function SellSharesDialog({
 // ─── StockDetailView ───────────────────────────────────────────────────────────
 
 function StockDetailView({
-  stock, range, holding, balance, onBack, onRangeChange, onBuy, onSell, canTrade, onSignIn,
+  stock, range, holding, balance, onBack, onRangeChange, onBuy, onSell, signedIn, onSignIn,
 }: {
   stock: StockMeta;
   range: TimeRange;
@@ -2183,18 +2312,38 @@ function StockDetailView({
   onRangeChange: (r: TimeRange) => void;
   onBuy: (shares: number) => void;
   onSell: (shares: number) => void;
-  canTrade: boolean;
+  signedIn: boolean;
   onSignIn: () => void;
 }) {
   const delta = useRangeChange(stock.symbol, range, stock);
   const isGain = delta.changePercent >= 0;
   const [buyOpen, setBuyOpen] = useState(false);
   const [sellOpen, setSellOpen] = useState(false);
+  const [news, setNews] = useState<StockNewsItem[]>([]);
+  const [newsStatus, setNewsStatus] = useState<"loading" | "live" | "empty" | "error">("loading");
   const owned = !!holding && holding.shares > 0;
   const pct52 = Math.max(0, Math.min(100,
     ((stock.price - stock.low52w) / (stock.high52w - stock.low52w)) * 100
   ));
   const profit = holding ? (stock.price - holding.avgCost) * holding.shares : 0;
+
+  useEffect(() => {
+    let cancelled = false;
+    setNewsStatus("loading");
+    setNews([]);
+    fetchStockNews(stock.symbol)
+      .then(items => {
+        if (cancelled) return;
+        setNews(items);
+        setNewsStatus(items.length ? "live" : "empty");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setNews([]);
+        setNewsStatus("error");
+      });
+    return () => { cancelled = true; };
+  }, [stock.symbol]);
 
   return (
     <div className="flex flex-col h-full overflow-y-auto" style={{ scrollbarWidth: "thin", scrollbarColor: "var(--v-line-strong) transparent" }}>
@@ -2215,42 +2364,34 @@ function StockDetailView({
           <span className="text-xs" style={{ color: "var(--v-ink-soft)" }}>{stock.name}</span>
         </div>
         <div className="ml-auto flex items-center gap-3 flex-wrap justify-end">
-          {canTrade ? (
-            <>
-              <button
-                className="px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-opacity hover:opacity-90"
-                style={{ background: G, color: "#0a0a0a" }}
-                onClick={() => setBuyOpen(true)}
-              >
-                <Plus size={12} strokeWidth={2.5} />
-                Buy shares
-              </button>
-              <button
-                className="px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-opacity hover:opacity-90 disabled:opacity-50"
-                style={{
-                  background: owned ? R : "var(--v-line-strong)",
-                  color:      owned ? "#0a0a0a" : "var(--v-ink-dim)",
-                  cursor:     owned ? "pointer" : "not-allowed",
-                }}
-                disabled={!owned}
-                title={owned ? "Sell shares" : "No shares owned"}
-                onClick={() => owned && setSellOpen(true)}
-              >
-                <Minus size={12} strokeWidth={2.5} />
-                Sell shares
-              </button>
-            </>
-          ) : (
-            <button
-              className="px-3.5 py-1.5 rounded-lg text-xs font-semibold"
-              style={{ background: "var(--v-line)", color: "var(--v-ink)" }}
-              onClick={onSignIn}
-            >
-              Sign in to trade
-            </button>
-          )}
+          <button
+            className="px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-opacity hover:opacity-90"
+            style={{ background: G, color: "#0a0a0a" }}
+            onClick={() => setBuyOpen(true)}
+          >
+            <Plus size={12} strokeWidth={2.5} />
+            Buy shares
+          </button>
+          <button
+            className="px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-opacity hover:opacity-90 disabled:opacity-50"
+            style={{
+              background: owned ? R : "var(--v-line-strong)",
+              color:      owned ? "#0a0a0a" : "var(--v-ink-dim)",
+              cursor:     owned ? "pointer" : "not-allowed",
+            }}
+            disabled={!owned}
+            title={owned ? "Sell shares" : "No shares owned"}
+            onClick={() => owned && setSellOpen(true)}
+          >
+            <Minus size={12} strokeWidth={2.5} />
+            Sell shares
+          </button>
         </div>
       </div>
+
+      {!signedIn && (
+        <GuestSaveBanner onSignIn={onSignIn} className="mx-5 mt-3" />
+      )}
 
       <div className="mx-5 mt-4 flex flex-wrap gap-3">
         <div className="rounded-2xl border px-5 py-3 flex flex-wrap gap-x-8 gap-y-2" style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}>
@@ -2258,18 +2399,26 @@ function StockDetailView({
             <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>
               {stock.marketState === "REGULAR" ? "Live" : "At Close"}
             </div>
-            <div className="font-mono text-sm font-semibold mt-0.5" style={{ color: "var(--v-ink)" }}>
-              {fmt$(stock.price)}
-            </div>
+            {stock.price > 0 ? (
+              <div className="font-mono text-sm font-semibold mt-0.5" style={{ color: "var(--v-ink)" }}>
+                {fmt$(stock.price)}
+              </div>
+            ) : (
+              <TextSkeleton width="4rem" height="0.9rem" className="mt-1.5" />
+            )}
           </div>
           <div>
             <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Change</div>
-            <div
-              className="font-mono text-sm font-semibold mt-0.5"
-              style={{ color: stock.changePercent >= 0 ? G : R }}
-            >
-              {fmtChangeAmt(stock.change)} ({fmtPct(stock.changePercent)})
-            </div>
+            {stock.price > 0 ? (
+              <div
+                className="font-mono text-sm font-semibold mt-0.5"
+                style={{ color: stock.changePercent >= 0 ? G : R }}
+              >
+                {fmtChangeAmt(stock.change)} ({fmtPct(stock.changePercent)})
+              </div>
+            ) : (
+              <TextSkeleton width="5.5rem" height="0.9rem" className="mt-1.5" />
+            )}
           </div>
         </div>
 
@@ -2384,6 +2533,80 @@ function StockDetailView({
         </div>
       </div>
 
+      <div className="mx-5 mt-3 rounded-2xl border overflow-hidden" style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}>
+        <div className="px-5 py-3.5 border-b flex items-center gap-2" style={{ borderColor: "var(--v-line)" }}>
+          <Newspaper size={12} style={{ color: "var(--v-ink-dim)" }} />
+          <div className="text-[9px] font-mono uppercase tracking-[0.15em]" style={{ color: "var(--v-ink-dim)" }}>
+            Live news
+          </div>
+        </div>
+        {newsStatus === "loading" && (
+          <div className="flex flex-col gap-3 p-4">
+            {[0, 1, 2].map(i => (
+              <div key={i} className="flex gap-3">
+                <TextSkeleton width="5.5rem" height="3.5rem" className="rounded-lg flex-shrink-0" />
+                <div className="flex-1 flex flex-col gap-2 py-1">
+                  <TextSkeleton width="90%" height="0.75rem" />
+                  <TextSkeleton width="55%" height="0.65rem" />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {newsStatus === "error" && (
+          <div className="px-5 py-8 text-center text-sm font-mono" style={{ color: "var(--v-ink-dim)" }}>
+            News unavailable
+          </div>
+        )}
+        {newsStatus === "empty" && (
+          <div className="px-5 py-8 text-center text-sm font-mono" style={{ color: "var(--v-ink-dim)" }}>
+            No recent headlines
+          </div>
+        )}
+        {newsStatus === "live" && (
+          <div className="divide-y" style={{ borderColor: "var(--v-line)" }}>
+            {news.map(item => (
+              <a
+                key={item.id}
+                href={item.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex gap-3 px-4 py-3.5 transition-colors hover:bg-white/5"
+                style={{ borderColor: "var(--v-line)" }}
+              >
+                <div
+                  className="w-22 h-14 w-[5.5rem] rounded-lg overflow-hidden flex-shrink-0 border"
+                  style={{ background: "var(--v-line)", borderColor: "var(--v-line-strong)" }}
+                >
+                  {item.image ? (
+                    <img
+                      src={item.image}
+                      alt=""
+                      className="w-full h-full object-cover"
+                      loading="lazy"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center">
+                      <Newspaper size={16} style={{ color: "var(--v-ink-dim)" }} />
+                    </div>
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] font-medium leading-snug" style={{ color: "var(--v-ink)" }}>
+                    {item.title}
+                  </div>
+                  <div className="mt-1.5 flex items-center gap-1.5 text-[11px] font-mono" style={{ color: "var(--v-ink-dim)" }}>
+                    <span className="truncate">{item.publisher}</span>
+                    <ExternalLink size={10} className="flex-shrink-0 opacity-70" />
+                  </div>
+                </div>
+              </a>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div
         className="mx-5 mt-3 mb-6 px-4 py-3 rounded-xl text-[11px] font-mono"
         style={{ background: "var(--v-line)", color: "var(--v-ink-dim)" }}
@@ -2416,22 +2639,43 @@ function StockDetailView({
 function MarketStrip({ stocks, status }: { stocks: StockMeta[]; status: "loading" | "live" | "stale" | "error" }) {
   const indices = stocks.filter(s => ["SPY", "QQQ", "GLD"].includes(s.symbol));
   const statusLabel =
-    status === "loading" ? "Loading…"
+    status === "loading" ? "loading…"
     : status === "error" ? "yfinance offline"
-    : status === "stale" ? "delayed (cached)"
+    : status === "stale" ? "delayed"
     : "yfinance";
   return (
     <div
       className="flex items-center gap-5 px-5 py-1.5 border-b overflow-x-auto"
       style={{ borderColor: "var(--v-line)", background: "var(--v-panel)" }}
     >
-      {indices.map(s => (
-        <div key={s.symbol} className="flex items-center gap-2 flex-shrink-0 text-[11px] font-mono">
-          <span style={{ color: "var(--v-ink-soft)" }}>{s.symbol}</span>
-          <span style={{ color: "var(--v-ink)" }}>{fmt$(s.price)}</span>
-          <span style={{ color: s.changePercent >= 0 ? G : R }}>{fmtPct(s.changePercent)}</span>
-        </div>
-      ))}
+      {status === "loading" && indices.every(s => s.price <= 0) ? (
+        <>
+          {["SPY", "QQQ", "GLD"].map(sym => (
+            <div key={sym} className="flex items-center gap-2 flex-shrink-0">
+              <span className="text-[11px] font-mono" style={{ color: "var(--v-ink-soft)" }}>{sym}</span>
+              <TextSkeleton width="3.25rem" height="0.65rem" />
+              <TextSkeleton width="2.5rem" height="0.65rem" />
+            </div>
+          ))}
+        </>
+      ) : (
+        indices.map(s => (
+          <div key={s.symbol} className="flex items-center gap-2 flex-shrink-0 text-[11px] font-mono">
+            <span style={{ color: "var(--v-ink-soft)" }}>{s.symbol}</span>
+            {s.price > 0 ? (
+              <>
+                <span style={{ color: "var(--v-ink)" }}>{fmt$(s.price)}</span>
+                <span style={{ color: s.changePercent >= 0 ? G : R }}>{fmtPct(s.changePercent)}</span>
+              </>
+            ) : (
+              <>
+                <TextSkeleton width="3.25rem" height="0.65rem" />
+                <TextSkeleton width="2.5rem" height="0.65rem" />
+              </>
+            )}
+          </div>
+        ))
+      )}
       <div className="ml-auto text-[10px] font-mono flex-shrink-0" style={{ color: "var(--v-ink-dim)" }}>
         {new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })} ET ·{" "}
         {statusLabel}
@@ -2453,19 +2697,11 @@ function BankPage({
 }) {
   const [depositOpen, setDepositOpen] = useState(false);
 
-  if (!signedIn) {
-    return (
-      <GuestGate
-        title="Sign in to use Bank"
-        body="Sign in or create an account to view your balance and transaction history."
-        onSignIn={onSignIn}
-      />
-    );
-  }
-
   return (
     <div className="flex-1 overflow-y-auto p-5" style={{ scrollbarWidth: "thin", scrollbarColor: "var(--v-line-strong) transparent" }}>
       <div className="max-w-2xl mx-auto flex flex-col gap-4">
+        {!signedIn && <GuestSaveBanner onSignIn={onSignIn} />}
+
         <div className="rounded-2xl border p-6" style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}>
           <div className="flex items-center justify-between gap-4">
             <div>
@@ -2670,8 +2906,8 @@ function AuthPanel({
         </div>
         <div className="text-xs mt-1" style={{ color: "var(--v-ink-soft)" }}>
           {mode === "signin"
-            ? "Sign in to trade, bank, and sync your portfolio"
-            : "Enter your email and password to start trading"}
+            ? "Sign in to sync bank & portfolio to your account"
+            : "Create an account to sync bank & portfolio across devices"}
         </div>
       </div>
 
@@ -2913,36 +3149,28 @@ function OnboardingDialog({
   );
 }
 
-function GuestGate({
-  title, body, onSignIn,
+function GuestSaveBanner({
+  onSignIn, className = "",
 }: {
-  title: string;
-  body: string;
   onSignIn: () => void;
+  className?: string;
 }) {
   return (
-    <div className="flex-1 flex items-center justify-center p-5">
-      <div className="max-w-sm w-full text-center flex flex-col items-center gap-3">
-        <div
-          className="w-12 h-12 rounded-2xl flex items-center justify-center"
-          style={{ background: "rgba(52,211,153,0.12)" }}
-        >
-          <Wallet size={20} style={{ color: G }} />
-        </div>
-        <div className="font-mono text-base font-semibold tracking-tight" style={{ color: "var(--v-ink)" }}>
-          {title}
-        </div>
-        <div className="text-xs leading-relaxed" style={{ color: "var(--v-ink-soft)" }}>
-          {body}
-        </div>
-        <button
-          className="mt-2 px-4 py-2.5 rounded-xl text-xs font-semibold"
-          style={{ background: G, color: "#0a0a0a" }}
-          onClick={onSignIn}
-        >
-          Sign in
-        </button>
+    <div
+      className={`flex flex-wrap items-center gap-3 px-4 py-3 rounded-xl text-[12px] ${className}`}
+      style={{ background: "rgba(52,211,153,0.08)", border: "1px solid rgba(52,211,153,0.25)", color: "var(--v-ink-soft)" }}
+    >
+      <div className="flex-1 min-w-[12rem] leading-relaxed">
+        You’re not signed in — bank & portfolio changes won’t be saved.
       </div>
+      <button
+        type="button"
+        className="px-3 py-1.5 rounded-lg text-[11px] font-semibold flex-shrink-0"
+        style={{ background: G, color: "#0a0a0a" }}
+        onClick={onSignIn}
+      >
+        Sign in to save
+      </button>
     </div>
   );
 }
@@ -3824,7 +4052,6 @@ export default function App() {
   }, [dragOver, activeWatchlist, activeList.symbols]);
 
   const deposit = useCallback((amount: number) => {
-    if (!signedIn) return;
     setBalance(b => b + amount);
     setTransactions(prev => [{
       id: "tx-" + Date.now(),
@@ -3832,10 +4059,9 @@ export default function App() {
       amount,
       timestamp: Date.now(),
     }, ...prev]);
-  }, [signedIn]);
+  }, []);
 
   const buyShares = useCallback((symbol: string, shares: number, price: number) => {
-    if (!signedIn) return;
     const cost = shares * price;
     setBalance(b => b - cost);
     setHoldings(prev => {
@@ -3854,10 +4080,9 @@ export default function App() {
       price,
       timestamp: Date.now(),
     }, ...prev]);
-  }, [signedIn]);
+  }, []);
 
   const sellShares = useCallback((symbol: string, shares: number, price: number) => {
-    if (!signedIn) return;
     const proceeds = shares * price;
     setBalance(b => b + proceeds);
     setHoldings(prev => prev.flatMap(h => {
@@ -3874,7 +4099,7 @@ export default function App() {
       price,
       timestamp: Date.now(),
     }, ...prev]);
-  }, [signedIn]);
+  }, []);
 
   const resetTradeHistory = useCallback(() => {
     setBalance(0);
@@ -3912,9 +4137,7 @@ export default function App() {
     holding,
     refreshKey: sparkEpoch,
     changeDisplay,
-    onTrade: signedIn
-      ? (symbol: string, mode: "buy" | "sell") => setTradeDialog({ symbol, mode })
-      : undefined,
+    onTrade: (symbol: string, mode: "buy" | "sell") => setTradeDialog({ symbol, mode }),
     isPinned:  pinnedSymbols.includes(stock.symbol),
     isDraggable: isDraggable && !holding,
     isDragOver: dragOver === stock.symbol,
@@ -4010,13 +4233,7 @@ export default function App() {
 
       {page === "portfolio" && (
         <div className="flex-1 flex flex-col overflow-hidden">
-          {!signedIn ? (
-            <GuestGate
-              title="Sign in to buy & sell"
-              body="Sign in or create an account to start trading stocks."
-              onSignIn={goSignIn}
-            />
-          ) : selectedStock ? (
+          {selectedStock ? (
             <StockDetailView
               stock={selectedStock}
               range={selectedDetailRange}
@@ -4026,7 +4243,7 @@ export default function App() {
               onRangeChange={r => setDetailRange(selectedStock.symbol, r)}
               onBuy={shares => buyShares(selectedStock.symbol, shares, selectedStock.price)}
               onSell={shares => sellShares(selectedStock.symbol, shares, selectedStock.price)}
-              canTrade={signedIn}
+              signedIn={signedIn}
               onSignIn={goSignIn}
             />
           ) : (
@@ -4034,6 +4251,9 @@ export default function App() {
               className="flex-1 overflow-auto p-4"
               style={{ scrollbarWidth: "thin", scrollbarColor: "var(--v-line-strong) transparent" }}
             >
+              {!signedIn && (
+                <GuestSaveBanner onSignIn={goSignIn} className="mb-4" />
+              )}
               <div className="flex items-center justify-between gap-3 mb-4 px-1">
                 <div>
                   <div className="font-mono text-[13px] font-semibold tracking-wide" style={{ color: "var(--v-ink)" }}>
@@ -4168,7 +4388,7 @@ export default function App() {
                 onRangeChange={r => setDetailRange(selectedStock.symbol, r)}
                 onBuy={shares => buyShares(selectedStock.symbol, shares, selectedStock.price)}
                 onSell={shares => sellShares(selectedStock.symbol, shares, selectedStock.price)}
-                canTrade={signedIn}
+                signedIn={signedIn}
                 onSignIn={goSignIn}
               />
             ) : (
@@ -4233,7 +4453,7 @@ export default function App() {
         />
       )}
 
-      {signedIn && tradeDialog && (() => {
+      {tradeDialog && (() => {
         const stock = stocks.find(s => s.symbol === tradeDialog.symbol);
         if (!stock) return null;
         if (tradeDialog.mode === "buy") {
