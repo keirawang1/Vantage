@@ -51,6 +51,8 @@ export interface StockNewsItem {
   publisher: string;
   publishedAt?: string | null;
   image?: string | null;
+  /** Original CDN image before proxy rewrite */
+  rawImage?: string | null;
   summary?: string | null;
 }
 
@@ -415,14 +417,46 @@ export async function searchStocks(query: string): Promise<SearchResult[]> {
 }
 
 export async function fetchStockNews(symbol: string, limit = 8): Promise<StockNewsItem[]> {
-  const sym = symbol.trim();
+  const sym = symbol.trim().toUpperCase();
   if (!sym) return [];
-  const res = await fetch(
-    apiUrl(`/api/news/${encodeURIComponent(sym)}?limit=${encodeURIComponent(String(limit))}`)
-  );
-  if (!res.ok) throw new Error(`News fetch failed (${res.status})`);
-  const json = await res.json();
-  return (json?.news ?? []) as StockNewsItem[];
+  const qs = `limit=${encodeURIComponent(String(limit))}`;
+  const path = `/api/news/${encodeURIComponent(sym)}?${qs}`;
+
+  // Prefer same-origin (Vite proxy / Vercel rewrite), then absolute Render URL.
+  const urls = [
+    apiUrl(path),
+    `https://vantage-api-eni1.onrender.com${path}`,
+  ].filter((u, i, arr) => arr.indexOf(u) === i);
+
+  let lastErr: Error | null = null;
+  for (const url of urls) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) {
+        lastErr = new Error(`News fetch failed (${res.status})`);
+        continue;
+      }
+      const json = await res.json();
+      const items = (json?.news ?? []) as StockNewsItem[];
+      const origin = API_BASE || (typeof window !== "undefined" ? window.location.origin : "");
+      return items
+        .filter(item => item && typeof item.title === "string" && item.title.trim() && item.url)
+        .map(item => {
+          const rawImage = item.image ?? null;
+          return {
+            ...item,
+            title: item.title.trim(),
+            rawImage,
+            image: rawImage
+              ? `${origin}/api/img?u=${encodeURIComponent(rawImage)}`
+              : null,
+          };
+        });
+    } catch (err) {
+      lastErr = err instanceof Error ? err : new Error(String(err));
+    }
+  }
+  throw lastErr ?? new Error("News fetch failed");
 }
 
 /** Prefetch common ranges for sparklines */

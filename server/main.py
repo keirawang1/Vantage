@@ -30,10 +30,10 @@ _CORS_ORIGINS = list(dict.fromkeys(
         "https://vantage-keirawang1.vercel.app",
     ]
 ))
-# Vercel production + preview deployments for this project
+# Vercel production + preview deployments, plus any local Vite port
 _CORS_ORIGIN_REGEX = os.environ.get(
     "VANTAGE_CORS_ORIGIN_REGEX",
-    r"https://(vantage|vantage-g2jl)(-[a-z0-9-]+)*\.vercel\.app",
+    r"https://(vantage|vantage-g2jl)(-[a-z0-9-]+)*\.vercel\.app|http://(localhost|127\.0\.0\.1):\d+",
 ).strip() or None
 app.add_middleware(
     CORSMiddleware,
@@ -107,7 +107,11 @@ def _cache_load() -> None:
 
 def _cache_save() -> None:
     with _CACHE_LOCK:
-        snapshot = {k: [ts, v] for k, (ts, v) in _CACHE.items()}
+        snapshot = {
+            k: [ts, v]
+            for k, (ts, v) in _CACHE.items()
+            if not str(k).startswith("img:")
+        }
     try:
         tmp = _CACHE_PATH.with_suffix(".tmp")
         tmp.write_text(json.dumps(snapshot, default=str))
@@ -645,6 +649,62 @@ def news(symbol: str, limit: int = Query(8, ge=1, le=20)):
     if items:
         _cache_put(cache_key, out)
     return out
+
+
+@app.get("/api/img")
+def proxy_image(u: str = Query(..., min_length=8, max_length=2000)):
+    """Proxy news thumbnails so browsers aren't blocked by hotlink/referrer rules."""
+    import urllib.request
+    from fastapi.responses import Response
+
+    url = u.strip()
+    if not (url.startswith("https://") or url.startswith("http://")):
+        raise HTTPException(400, "invalid image url")
+    host = url.split("/")[2].lower()
+    allowed = (
+        host.endswith("yimg.com")
+        or host.endswith("yahoo.com")
+        or host.endswith("yahooapis.com")
+        or host.endswith("cloudfront.net")
+        or host.endswith("googleusercontent.com")
+    )
+    if not allowed:
+        raise HTTPException(400, "host not allowed")
+
+    # In-memory only — never persist binary blobs into the JSON quote cache
+    cache_key = f"img:{url}"
+    with _CACHE_LOCK:
+        entry = _CACHE.get(cache_key)
+    if entry is not None:
+        ts, cached = entry
+        if (time.time() - ts) < 3600.0 and isinstance(cached, dict) and cached.get("body"):
+            return Response(
+                content=cached["body"],
+                media_type=str(cached.get("type") or "image/jpeg"),
+                headers={"Cache-Control": "public, max-age=3600"},
+            )
+
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 VantageNews/1.0", "Accept": "image/*"},
+        )
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = resp.read()
+            ctype = resp.headers.get("Content-Type") or "image/jpeg"
+    except Exception:
+        raise HTTPException(502, "image fetch failed")
+
+    if not data or len(data) > 2_500_000:
+        raise HTTPException(502, "image too large or empty")
+
+    with _CACHE_LOCK:
+        _CACHE[cache_key] = (time.time(), {"body": data, "type": ctype})
+    return Response(
+        content=data,
+        media_type=ctype,
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 @app.get("/api/health")

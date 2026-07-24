@@ -2331,22 +2331,24 @@ function StockDetailView({
     let cancelled = false;
     setNewsStatus("loading");
     setNews([]);
-    fetchStockNews(stock.symbol)
-      .then(items => {
+    const load = async () => {
+      try {
+        const items = await fetchStockNews(stock.symbol);
         if (cancelled) return;
         setNews(items);
         setNewsStatus(items.length ? "live" : "empty");
-      })
-      .catch(() => {
+      } catch {
         if (cancelled) return;
         setNews([]);
         setNewsStatus("error");
-      });
+      }
+    };
+    void load();
     return () => { cancelled = true; };
   }, [stock.symbol]);
 
   return (
-    <div className="flex flex-col h-full overflow-y-auto" style={{ scrollbarWidth: "thin", scrollbarColor: "var(--v-line-strong) transparent" }}>
+    <div className="flex flex-col h-full min-h-0 overflow-y-auto" style={{ scrollbarWidth: "thin", scrollbarColor: "var(--v-line-strong) transparent" }}>
       <div
         className="sticky top-0 z-20 flex items-center flex-wrap gap-x-4 gap-y-2 px-5 py-3 border-b backdrop-blur-xl"
         style={{ background: "color-mix(in srgb, var(--v-bg) 92%, transparent)", borderColor: "var(--v-line)" }}
@@ -2491,6 +2493,98 @@ function StockDetailView({
         <DetailChart symbol={stock.symbol} range={range} isGain={isGain} lastPrice={stock.price} />
       </div>
 
+      <div className="mx-5 mt-4 rounded-2xl border overflow-hidden" style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}>
+        <div className="px-5 py-3.5 border-b flex items-center justify-between gap-2" style={{ borderColor: "var(--v-line)" }}>
+          <div className="flex items-center gap-2">
+            <Newspaper size={12} style={{ color: "var(--v-ink-dim)" }} />
+            <div className="text-[9px] font-mono uppercase tracking-[0.15em]" style={{ color: "var(--v-ink-dim)" }}>
+              Live news
+            </div>
+          </div>
+          {newsStatus === "live" && (
+            <div className="text-[10px] font-mono" style={{ color: "var(--v-ink-dim)" }}>
+              {news.length} headline{news.length === 1 ? "" : "s"}
+            </div>
+          )}
+        </div>
+        {newsStatus === "loading" && (
+          <div className="flex flex-col gap-3 p-4">
+            {[0, 1, 2].map(i => (
+              <div key={i} className="flex gap-3 items-stretch">
+                <div className="h-16 w-24 rounded-lg flex-shrink-0 overflow-hidden">
+                  <TextSkeleton width="100%" height="100%" className="!block !w-full !h-full rounded-lg" />
+                </div>
+                <div className="flex-1 flex flex-col gap-2 py-1">
+                  <TextSkeleton width="92%" height="0.8rem" />
+                  <TextSkeleton width="70%" height="0.8rem" />
+                  <TextSkeleton width="40%" height="0.65rem" />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {newsStatus === "error" && (
+          <div className="px-5 py-8 text-center text-sm font-mono" style={{ color: "var(--v-ink-dim)" }}>
+            News unavailable — try again in a moment
+          </div>
+        )}
+        {newsStatus === "empty" && (
+          <div className="px-5 py-8 text-center text-sm font-mono" style={{ color: "var(--v-ink-dim)" }}>
+            No recent headlines
+          </div>
+        )}
+        {newsStatus === "live" && (
+          <div className="flex flex-col">
+            {news.map((item, idx) => (
+              <a
+                key={item.id || `${item.url}-${idx}`}
+                href={item.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex gap-3 px-4 py-3.5 transition-colors hover:bg-white/5 border-b last:border-b-0"
+                style={{ borderColor: "var(--v-line)" }}
+              >
+                <div
+                  className="h-16 w-24 rounded-lg overflow-hidden flex-shrink-0 border"
+                  style={{ background: "var(--v-line)", borderColor: "var(--v-line-strong)" }}
+                >
+                  {item.image ? (
+                    <img
+                      src={item.image}
+                      alt=""
+                      className="w-full h-full object-cover"
+                      loading="lazy"
+                      referrerPolicy="no-referrer"
+                      onError={e => {
+                        const el = e.currentTarget;
+                        if (item.rawImage && el.src !== item.rawImage) {
+                          el.src = item.rawImage;
+                          return;
+                        }
+                        el.style.display = "none";
+                      }}
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center">
+                      <Newspaper size={18} style={{ color: "var(--v-ink-dim)" }} />
+                    </div>
+                  )}
+                </div>
+                <div className="min-w-0 flex-1 self-center">
+                  <div className="text-[13px] font-medium leading-snug" style={{ color: "var(--v-ink)" }}>
+                    {item.title}
+                  </div>
+                  <div className="mt-1.5 flex items-center gap-1.5 text-[11px] font-mono" style={{ color: "var(--v-ink-dim)" }}>
+                    <span className="truncate">{item.publisher || "Yahoo Finance"}</span>
+                    <ExternalLink size={10} className="flex-shrink-0 opacity-70" />
+                  </div>
+                </div>
+              </a>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div className="mx-5 mt-4 rounded-2xl border p-5" style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}>
         <div className="text-[9px] font-mono uppercase tracking-[0.15em] mb-4" style={{ color: "var(--v-ink-dim)" }}>Today</div>
         <div className="grid grid-cols-3 sm:grid-cols-6 gap-x-6 gap-y-5">
@@ -2531,80 +2625,6 @@ function StockDetailView({
             <span className="text-[10px] font-mono" style={{ color: isGain ? G : R }}>▲ Current: {fmt$(stock.price)}</span>
           </div>
         </div>
-      </div>
-
-      <div className="mx-5 mt-3 rounded-2xl border overflow-hidden" style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}>
-        <div className="px-5 py-3.5 border-b flex items-center gap-2" style={{ borderColor: "var(--v-line)" }}>
-          <Newspaper size={12} style={{ color: "var(--v-ink-dim)" }} />
-          <div className="text-[9px] font-mono uppercase tracking-[0.15em]" style={{ color: "var(--v-ink-dim)" }}>
-            Live news
-          </div>
-        </div>
-        {newsStatus === "loading" && (
-          <div className="flex flex-col gap-3 p-4">
-            {[0, 1, 2].map(i => (
-              <div key={i} className="flex gap-3">
-                <TextSkeleton width="5.5rem" height="3.5rem" className="rounded-lg flex-shrink-0" />
-                <div className="flex-1 flex flex-col gap-2 py-1">
-                  <TextSkeleton width="90%" height="0.75rem" />
-                  <TextSkeleton width="55%" height="0.65rem" />
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-        {newsStatus === "error" && (
-          <div className="px-5 py-8 text-center text-sm font-mono" style={{ color: "var(--v-ink-dim)" }}>
-            News unavailable
-          </div>
-        )}
-        {newsStatus === "empty" && (
-          <div className="px-5 py-8 text-center text-sm font-mono" style={{ color: "var(--v-ink-dim)" }}>
-            No recent headlines
-          </div>
-        )}
-        {newsStatus === "live" && (
-          <div className="divide-y" style={{ borderColor: "var(--v-line)" }}>
-            {news.map(item => (
-              <a
-                key={item.id}
-                href={item.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex gap-3 px-4 py-3.5 transition-colors hover:bg-white/5"
-                style={{ borderColor: "var(--v-line)" }}
-              >
-                <div
-                  className="w-22 h-14 w-[5.5rem] rounded-lg overflow-hidden flex-shrink-0 border"
-                  style={{ background: "var(--v-line)", borderColor: "var(--v-line-strong)" }}
-                >
-                  {item.image ? (
-                    <img
-                      src={item.image}
-                      alt=""
-                      className="w-full h-full object-cover"
-                      loading="lazy"
-                      referrerPolicy="no-referrer"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center">
-                      <Newspaper size={16} style={{ color: "var(--v-ink-dim)" }} />
-                    </div>
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="text-[13px] font-medium leading-snug" style={{ color: "var(--v-ink)" }}>
-                    {item.title}
-                  </div>
-                  <div className="mt-1.5 flex items-center gap-1.5 text-[11px] font-mono" style={{ color: "var(--v-ink-dim)" }}>
-                    <span className="truncate">{item.publisher}</span>
-                    <ExternalLink size={10} className="flex-shrink-0 opacity-70" />
-                  </div>
-                </div>
-              </a>
-            ))}
-          </div>
-        )}
       </div>
 
       <div
@@ -2696,6 +2716,15 @@ function BankPage({
   onSignIn: () => void;
 }) {
   const [depositOpen, setDepositOpen] = useState(false);
+  const TX_PAGE = 6;
+  const [txPage, setTxPage] = useState(0);
+  const txPages = Math.max(1, Math.ceil(transactions.length / TX_PAGE));
+
+  useEffect(() => {
+    setTxPage(p => Math.min(p, Math.max(0, txPages - 1)));
+  }, [txPages]);
+
+  const pageTx = transactions.slice(txPage * TX_PAGE, txPage * TX_PAGE + TX_PAGE);
 
   return (
     <div className="flex-1 overflow-y-auto p-5" style={{ scrollbarWidth: "thin", scrollbarColor: "var(--v-line-strong) transparent" }}>
@@ -2724,8 +2753,37 @@ function BankPage({
         </div>
 
         <div className="rounded-2xl border overflow-hidden" style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}>
-          <div className="px-5 py-3.5 border-b text-[10px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)", borderColor: "var(--v-line)" }}>
-            Transaction history
+          <div className="px-5 py-3.5 border-b flex items-center justify-between gap-3" style={{ borderColor: "var(--v-line)" }}>
+            <div className="text-[10px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>
+              Transaction history
+            </div>
+            {transactions.length > 0 && (
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  className="w-7 h-7 rounded-md flex items-center justify-center transition-opacity disabled:opacity-30 hover:bg-white/5"
+                  style={{ color: "var(--v-ink-soft)", border: "1px solid var(--v-line-strong)" }}
+                  disabled={txPage <= 0}
+                  onClick={() => setTxPage(p => Math.max(0, p - 1))}
+                  aria-label="Previous transactions"
+                >
+                  <ChevronLeft size={14} />
+                </button>
+                <span className="text-[11px] font-mono tabular-nums min-w-[3.5rem] text-center" style={{ color: "var(--v-ink-dim)" }}>
+                  {txPage + 1}/{txPages}
+                </span>
+                <button
+                  type="button"
+                  className="w-7 h-7 rounded-md flex items-center justify-center transition-opacity disabled:opacity-30 hover:bg-white/5"
+                  style={{ color: "var(--v-ink-soft)", border: "1px solid var(--v-line-strong)" }}
+                  disabled={txPage >= txPages - 1}
+                  onClick={() => setTxPage(p => Math.min(txPages - 1, p + 1))}
+                  aria-label="Next transactions"
+                >
+                  <ChevronRight size={14} />
+                </button>
+              </div>
+            )}
           </div>
           {transactions.length === 0 ? (
             <div className="px-5 py-10 text-center text-sm font-mono" style={{ color: "var(--v-ink-dim)" }}>
@@ -2733,7 +2791,7 @@ function BankPage({
             </div>
           ) : (
             <div className="divide-y" style={{ borderColor: "var(--v-line)" }}>
-              {transactions.map(tx => {
+              {pageTx.map(tx => {
                 const isBuy = tx.type === "buy";
                 const inflow = !isBuy; // deposits and sells add money
                 const sharesStr = tx.shares?.toLocaleString("en-US", { maximumFractionDigits: 4 });
@@ -4232,7 +4290,7 @@ export default function App() {
       )}
 
       {page === "portfolio" && (
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 flex flex-col overflow-hidden min-h-0">
           {selectedStock ? (
             <StockDetailView
               stock={selectedStock}
@@ -4347,7 +4405,7 @@ export default function App() {
       )}
 
       {page === "home" && (
-        <div className="flex flex-1 overflow-hidden">
+        <div className="flex flex-1 overflow-hidden min-h-0">
           <WatchlistSidebar
             watchlists={watchlists}
             activeId={activeWatchlist}
@@ -4377,7 +4435,7 @@ export default function App() {
               : <ChevronRight size={14} />}
           </button>
 
-          <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+          <div className="flex-1 flex flex-col overflow-hidden min-w-0 min-h-0">
             {selectedStock ? (
               <StockDetailView
                 stock={selectedStock}
