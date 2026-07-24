@@ -264,11 +264,6 @@
   50% { opacity: 0.4; }
 }
 
-@keyframes v-pulse-soft {
-  0%, 100% { opacity: 0.55; }
-  50% { opacity: 1; }
-}
-
 .v-skeleton {
   display: inline-block;
   border-radius: 6px;
@@ -308,11 +303,6 @@
 
 .v-chart-loader .v-chart-fill {
   animation: v-chart-glow 1.8s ease-in-out infinite;
-}
-
-.v-chart-loader .v-chart-dot {
-  fill: var(--v-ink-soft);
-  animation: v-pulse-soft 1.2s ease-in-out infinite;
 }
 
 /* Horizontal top bars: scrollable, no visible scrollbar */

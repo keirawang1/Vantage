@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo, useRef, useCallback, useId } from "react";
+import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, useId } from "react";
+import { createPortal } from "react-dom";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from "recharts";
@@ -282,7 +283,6 @@ function ChartSkeleton({ height = 260, className = "" }: { height?: number; clas
           className="v-chart-path"
           d="M8 88 C 40 86, 52 40, 80 48 S 120 96, 150 70 S 200 20, 230 36 S 280 90, 312 58"
         />
-        <circle className="v-chart-dot" cx="312" cy="58" r="3.5" />
       </svg>
     </div>
   );
@@ -566,6 +566,7 @@ function WatchlistAddMenu({
 
 function SearchDropdown({
   query, stocks, watchlists, onSelectSymbol, onToggleWatchlist, onClose, onStocksHydrated, refreshKey = 0,
+  anchorRef,
 }: {
   query: string;
   stocks: StockMeta[];
@@ -575,11 +576,13 @@ function SearchDropdown({
   onClose: () => void;
   onStocksHydrated?: (stocks: StockMeta[]) => void;
   refreshKey?: number;
+  anchorRef?: React.RefObject<HTMLElement | null>;
 }) {
   const [addMenuFor, setAddMenuFor] = useState<string | null>(null);
   const [remote, setRemote] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [localSpark, setLocalSpark] = useState(0);
+  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
 
   useEffect(() => {
     const q = query.trim();
@@ -637,31 +640,62 @@ function SearchDropdown({
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const h = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+      const t = e.target as Node;
+      if (ref.current?.contains(t) || anchorRef?.current?.contains(t)) return;
+      onClose();
     };
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
-  }, [onClose]);
+  }, [onClose, anchorRef]);
 
-  if (!query.trim()) return null;
+  useLayoutEffect(() => {
+    const el = anchorRef?.current;
+    if (!el) {
+      setPos(null);
+      return;
+    }
+    const update = () => {
+      const r = el.getBoundingClientRect();
+      setPos({ top: r.bottom + 6, left: r.left, width: r.width });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [anchorRef, query, loading, results.length]);
+
+  if (!query.trim() || !pos) return null;
+
+  const panelStyle = {
+    top: pos.top,
+    left: pos.left,
+    width: pos.width,
+    background: "var(--v-panel)",
+    borderColor: "var(--v-line-strong)",
+  } as const;
+
   if (!loading && results.length === 0) {
-    return (
+    return createPortal(
       <div
         ref={ref}
-        className="absolute left-0 right-0 top-[calc(100%+6px)] z-50 rounded-2xl border shadow-2xl px-3 py-3 text-xs font-mono"
-        style={{ background: "var(--v-panel)", borderColor: "var(--v-line-strong)", color: "var(--v-ink-dim)" }}
+        className="fixed z-[200] rounded-2xl border shadow-2xl px-3 py-3 text-xs font-mono"
+        style={{ ...panelStyle, color: "var(--v-ink-dim)" }}
         onMouseDown={e => e.preventDefault()}
       >
         No stocks found
-      </div>
+      </div>,
+      document.body,
     );
   }
 
-  return (
+  return createPortal(
     <div
       ref={ref}
-      className="absolute left-0 right-0 top-[calc(100%+6px)] z-50 rounded-2xl border shadow-2xl overflow-visible"
-      style={{ background: "var(--v-panel)", borderColor: "var(--v-line-strong)" }}
+      className="fixed z-[200] rounded-2xl border shadow-2xl overflow-visible"
+      style={panelStyle}
       onMouseDown={e => e.preventDefault()}
     >
       <div
@@ -778,7 +812,8 @@ function SearchDropdown({
         );
       })}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -1653,14 +1688,36 @@ function RangePicker({
 }) {
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
 
   useEffect(() => {
     if (!moreOpen) return;
     const h = (e: MouseEvent) => {
-      if (moreRef.current && !moreRef.current.contains(e.target as Node)) setMoreOpen(false);
+      const t = e.target as Node;
+      if (moreRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setMoreOpen(false);
     };
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
+  }, [moreOpen]);
+
+  useLayoutEffect(() => {
+    if (!moreOpen || !moreRef.current) {
+      setMenuPos(null);
+      return;
+    }
+    const update = () => {
+      const r = moreRef.current!.getBoundingClientRect();
+      setMenuPos({ top: r.bottom + 4, right: window.innerWidth - r.right });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
   }, [moreOpen]);
 
   const overflowActive = RANGE_OVERFLOW.includes(range);
@@ -1695,10 +1752,11 @@ function RangePicker({
         >
           <ChevronDown size={12} />
         </button>
-        {moreOpen && (
+        {moreOpen && menuPos && createPortal(
           <div
-            className="absolute right-0 top-9 z-50 min-w-[5.5rem] rounded-xl border py-1.5 shadow-2xl"
-            style={{ background: "var(--v-panel)", borderColor: "var(--v-line-strong)" }}
+            ref={menuRef}
+            className="fixed z-[200] min-w-[5.5rem] rounded-xl border py-1.5 shadow-2xl"
+            style={{ top: menuPos.top, right: menuPos.right, background: "var(--v-panel)", borderColor: "var(--v-line-strong)" }}
           >
             {RANGE_OVERFLOW.map(r => (
               <button
@@ -1711,7 +1769,8 @@ function RangePicker({
                 {r}
               </button>
             ))}
-          </div>
+          </div>,
+          document.body,
         )}
       </div>
     </div>
@@ -1749,14 +1808,37 @@ function DropdownMenu<T extends string>({
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
 
   useEffect(() => {
+    if (!open) return;
     const h = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (ref.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
     };
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
-  }, []);
+  }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open || !ref.current) {
+      setMenuPos(null);
+      return;
+    }
+    const update = () => {
+      const r = ref.current!.getBoundingClientRect();
+      setMenuPos({ top: r.bottom + 4, right: window.innerWidth - r.right });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [open]);
 
   const active = value !== options[0].value;
 
@@ -1773,10 +1855,11 @@ function DropdownMenu<T extends string>({
           {activeSuffix ? ` ${activeSuffix}` : ""}
         </span>
       </button>
-      {open && (
+      {open && menuPos && createPortal(
         <div
-          className="absolute right-0 top-9 z-[100] min-w-[148px] rounded-xl border py-1.5 shadow-2xl"
-          style={{ background: "var(--v-panel)", borderColor: "var(--v-line-strong)" }}
+          ref={menuRef}
+          className="fixed z-[200] min-w-[148px] rounded-xl border py-1.5 shadow-2xl"
+          style={{ top: menuPos.top, right: menuPos.right, background: "var(--v-panel)", borderColor: "var(--v-line-strong)" }}
         >
           {options.map(o => (
             <button
@@ -1792,7 +1875,8 @@ function DropdownMenu<T extends string>({
               ) : null}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
@@ -1827,7 +1911,7 @@ function Toolbar({
 
   return (
     <div
-      className="flex flex-nowrap items-center gap-2.5 px-4 py-2 border-b sticky top-0 z-10 backdrop-blur-md overflow-x-auto no-scrollbar"
+      className="flex flex-nowrap items-center gap-2.5 px-4 py-2 border-b sticky top-0 z-40 backdrop-blur-md overflow-x-auto no-scrollbar"
       style={{
         background:  "color-mix(in srgb, var(--v-panel) 85%, transparent)",
         borderColor: "var(--v-line)",
@@ -1867,6 +1951,7 @@ function Toolbar({
             onClose={() => setSearchOpen(false)}
             onStocksHydrated={onStocksHydrated}
             refreshKey={refreshKey}
+            anchorRef={searchRef}
           />
         )}
       </div>
@@ -1929,6 +2014,17 @@ function DetailChart({ symbol, range, isGain, lastPrice }: { symbol: string; ran
   const [loading, setLoading] = useState(() => getHistory(symbol, range, lastPrice).length < 2);
   const uid = useId();
   const gradId = `dc-${uid}`;
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+
+  useLayoutEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width));
+    ro.observe(el);
+    setWidth(el.clientWidth);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1950,94 +2046,110 @@ function DetailChart({ symbol, range, isGain, lastPrice }: { symbol: string; ran
   const color = seriesGain ? G : R;
   const domain = useMemo(() => priceDomain(data), [data]);
   const [yMin, yMax] = domain;
+  const narrow = width > 0 && width < 360;
+  const compact = width > 0 && width < 480;
+  const chartH = narrow ? 180 : compact ? 210 : 260;
+  const yAxisW = narrow ? 36 : compact ? 44 : 56;
+  const chartMargin = narrow
+    ? { top: 4, right: 2, bottom: 16, left: 0 }
+    : compact
+      ? { top: 6, right: 6, bottom: 18, left: 4 }
+      : { top: 8, right: 12, bottom: 22, left: 18 };
   const xTicks = useMemo(() => {
     if (data.length < 2) return [];
     const n = data.length;
-    const count = Math.min(6, n);
+    const count = Math.min(narrow ? 4 : compact ? 5 : 6, n);
     const out: number[] = [];
     for (let k = 0; k < count; k++) {
       out.push(Math.round((k / (count - 1)) * (n - 1)));
     }
     return [...new Set(out)];
-  }, [data]);
+  }, [data, narrow, compact]);
   const yTicks = useMemo(() => {
     const [lo, hi] = domain;
     if (!(hi > lo)) return [lo];
+    if (narrow) return [lo, hi];
     return [lo, lo + (hi - lo) / 3, lo + (2 * (hi - lo)) / 3, hi];
-  }, [domain]);
+  }, [domain, narrow]);
 
   if (loading) {
-    return <ChartSkeleton height={260} />;
+    return (
+      <div ref={wrapRef}>
+        <ChartSkeleton height={chartH || 220} />
+      </div>
+    );
   }
 
   if (data.length < 2) {
     return (
-      <div className="h-[260px] flex items-center justify-center font-mono text-xs" style={{ color: "var(--v-ink-dim)" }}>
+      <div ref={wrapRef} className="flex items-center justify-center font-mono text-xs" style={{ height: chartH || 220, color: "var(--v-ink-dim)" }}>
         No chart data
       </div>
     );
   }
 
   return (
-    <ResponsiveContainer width="100%" height={260}>
-      <AreaChart data={indexed} margin={{ top: 8, right: 12, bottom: 22, left: 18 }}>
-        <defs>
-          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="5%"  stopColor={color} stopOpacity={0.25} />
-            <stop offset="95%" stopColor={color} stopOpacity={0}    />
-          </linearGradient>
-        </defs>
-        <XAxis
-          dataKey="i"
-          type="number"
-          domain={[0, indexed.length - 1]}
-          ticks={xTicks}
-          tickFormatter={i => {
-            const pt = indexed[Number(i)];
-            return pt ? fmtTime(pt.t, range) : "";
-          }}
-          tick={{ fontFamily: "Geist Mono, monospace", fontSize: 10, fill: "var(--v-ink-dim)" }}
-          axisLine={false}
-          tickLine={false}
-          tickMargin={12}
-          padding={{ left: 8, right: 8 }}
-          interval={0}
-        />
-        <YAxis
-          dataKey="p"
-          domain={domain}
-          ticks={yTicks}
-          tickFormatter={p => fmtPriceTick(Number(p), yMin, yMax)}
-          tick={{ fontFamily: "Geist Mono, monospace", fontSize: 10, fill: "var(--v-ink-dim)" }}
-          axisLine={false}
-          tickLine={false}
-          width={56}
-          orientation="right"
-        />
-        <Tooltip
-          content={({ active, payload }) => {
-            if (!active || !payload?.length) return null;
-            const row = (payload.find(p => p.payload)?.payload ?? payload[0].payload) as {
-              t: number; p: number; v?: number;
-            };
-            const vol = typeof row.v === "number" ? row.v : 0;
-            return (
-              <div
-                className="px-2.5 py-2 rounded-xl border text-xs font-mono shadow-xl"
-                style={{ background: "var(--v-panel)", borderColor: "var(--v-line-strong)", color: "var(--v-ink)" }}
-              >
-                <div className="mb-0.5" style={{ color: "var(--v-ink-dim)" }}>{fmtTime(row.t, range)}</div>
-                <div className="font-semibold">{fmt$(row.p)}</div>
-                <div className="mt-0.5" style={{ color: "var(--v-ink-dim)" }}>
-                  Vol {vol > 0 ? fmtVol(vol) : "—"}
+    <div ref={wrapRef}>
+      <ResponsiveContainer width="100%" height={chartH}>
+        <AreaChart data={indexed} margin={chartMargin}>
+          <defs>
+            <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%"  stopColor={color} stopOpacity={0.25} />
+              <stop offset="95%" stopColor={color} stopOpacity={0}    />
+            </linearGradient>
+          </defs>
+          <XAxis
+            dataKey="i"
+            type="number"
+            domain={[0, indexed.length - 1]}
+            ticks={xTicks}
+            tickFormatter={i => {
+              const pt = indexed[Number(i)];
+              return pt ? fmtTime(pt.t, range) : "";
+            }}
+            tick={{ fontFamily: "Geist Mono, monospace", fontSize: narrow ? 9 : 10, fill: "var(--v-ink-dim)" }}
+            axisLine={false}
+            tickLine={false}
+            tickMargin={narrow ? 8 : 12}
+            padding={{ left: narrow ? 2 : 8, right: narrow ? 2 : 8 }}
+            interval={0}
+          />
+          <YAxis
+            dataKey="p"
+            domain={domain}
+            ticks={yTicks}
+            tickFormatter={p => fmtPriceTick(Number(p), yMin, yMax)}
+            tick={{ fontFamily: "Geist Mono, monospace", fontSize: narrow ? 9 : 10, fill: "var(--v-ink-dim)" }}
+            axisLine={false}
+            tickLine={false}
+            width={yAxisW}
+            orientation="right"
+          />
+          <Tooltip
+            content={({ active, payload }) => {
+              if (!active || !payload?.length) return null;
+              const row = (payload.find(p => p.payload)?.payload ?? payload[0].payload) as {
+                t: number; p: number; v?: number;
+              };
+              const vol = typeof row.v === "number" ? row.v : 0;
+              return (
+                <div
+                  className="px-2.5 py-2 rounded-xl border text-xs font-mono shadow-xl"
+                  style={{ background: "var(--v-panel)", borderColor: "var(--v-line-strong)", color: "var(--v-ink)" }}
+                >
+                  <div className="mb-0.5" style={{ color: "var(--v-ink-dim)" }}>{fmtTime(row.t, range)}</div>
+                  <div className="font-semibold">{fmt$(row.p)}</div>
+                  <div className="mt-0.5" style={{ color: "var(--v-ink-dim)" }}>
+                    Vol {vol > 0 ? fmtVol(vol) : "—"}
+                  </div>
                 </div>
-              </div>
-            );
-          }}
-        />
-        <Area type="linear" dataKey="p" stroke={color} strokeWidth={1.5} fill={`url(#${gradId})`} dot={false} isAnimationActive={false} />
-      </AreaChart>
-    </ResponsiveContainer>
+              );
+            }}
+          />
+          <Area type="linear" dataKey="p" stroke={color} strokeWidth={1.5} fill={`url(#${gradId})`} dot={false} isAnimationActive={false} />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
   );
 }
 
@@ -2045,9 +2157,9 @@ function DetailChart({ symbol, range, isGain, lastPrice }: { symbol: string; ran
 
 function StatCell({ label, value, accent }: { label: string; value: string; accent?: string }) {
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col gap-1 min-w-0">
       <div className="text-[9px] font-mono uppercase tracking-[0.12em]" style={{ color: "var(--v-ink-dim)" }}>{label}</div>
-      <div className="text-[13px] font-mono font-medium" style={{ color: accent ?? "var(--v-ink)" }}>{value}</div>
+      <div className="text-[13px] font-mono font-medium tabular-nums truncate" style={{ color: accent ?? "var(--v-ink)" }}>{value}</div>
     </div>
   );
 }
@@ -2356,34 +2468,38 @@ function StockDetailView({
   }, [stock.symbol]);
 
   return (
-    <div className="flex flex-col h-full min-h-0 overflow-y-auto" style={{ scrollbarWidth: "thin", scrollbarColor: "var(--v-line-strong) transparent" }}>
+    <div
+      className="@container flex flex-col h-full min-h-0 overflow-auto"
+      style={{ scrollbarWidth: "thin", scrollbarColor: "var(--v-line-strong) transparent" }}
+    >
       <div
-        className="sticky top-0 z-20 flex items-center flex-nowrap gap-x-4 px-5 py-3 border-b backdrop-blur-xl overflow-x-auto no-scrollbar"
+        className="sticky top-0 z-20 flex items-center gap-2 px-3 @[420px]:px-5 py-2.5 border-b backdrop-blur-xl"
         style={{ background: "color-mix(in srgb, var(--v-bg) 92%, transparent)", borderColor: "var(--v-line)" }}
       >
         <button
-          className="flex items-center gap-1 text-xs transition-opacity hover:opacity-60 flex-shrink-0 whitespace-nowrap"
+          className="flex items-center gap-0.5 text-xs transition-opacity hover:opacity-60 flex-shrink-0"
           style={{ color: "var(--v-ink-soft)" }}
           onClick={onBack}
         >
-          <ChevronLeft size={14} />Back
+          <ChevronLeft size={14} />
+          <span className="hidden @[360px]:inline">Back</span>
         </button>
         <div className="w-px h-4 flex-shrink-0" style={{ background: "var(--v-line-strong)" }} />
-        <div className="flex items-center gap-3 flex-shrink-0 whitespace-nowrap">
-          <span className="font-mono text-base font-semibold tracking-wider" style={{ color: "var(--v-ink)" }}>{stock.symbol}</span>
-          <span className="text-xs" style={{ color: "var(--v-ink-soft)" }}>{stock.name}</span>
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <span className="font-mono text-sm @[420px]:text-base font-semibold tracking-wider flex-shrink-0" style={{ color: "var(--v-ink)" }}>{stock.symbol}</span>
+          <span className="text-xs truncate min-w-0 hidden @[400px]:inline" style={{ color: "var(--v-ink-soft)" }}>{stock.name}</span>
         </div>
-        <div className="ml-auto flex items-center gap-3 flex-nowrap justify-end flex-shrink-0">
+        <div className="flex items-center gap-1.5 @[420px]:gap-2.5 flex-shrink-0">
           <button
-            className="px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-opacity hover:opacity-90 whitespace-nowrap"
+            className="px-2.5 @[420px]:px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition-opacity hover:opacity-90"
             style={{ background: G, color: "#0a0a0a" }}
             onClick={() => setBuyOpen(true)}
           >
             <Plus size={12} strokeWidth={2.5} />
-            Buy shares
+            Buy
           </button>
           <button
-            className="px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="px-2.5 @[420px]:px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition-opacity hover:opacity-90 disabled:opacity-50"
             style={{
               background: owned ? R : "var(--v-line-strong)",
               color:      owned ? "#0a0a0a" : "var(--v-ink-dim)",
@@ -2394,256 +2510,275 @@ function StockDetailView({
             onClick={() => owned && setSellOpen(true)}
           >
             <Minus size={12} strokeWidth={2.5} />
-            Sell shares
+            Sell
           </button>
         </div>
       </div>
 
       {!signedIn && (
-        <GuestSaveBanner onSignIn={onSignIn} className="mx-5 mt-3" />
+        <GuestSaveBanner onSignIn={onSignIn} className="mx-3 @[420px]:mx-5 mt-3" />
       )}
 
-      <div className="mx-5 mt-4 flex flex-wrap gap-3">
-        <div className="rounded-2xl border px-5 py-3 flex flex-wrap gap-x-8 gap-y-2" style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}>
-          <div>
-            <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>
-              {stock.marketState === "REGULAR" ? "Live" : "At Close"}
-            </div>
-            {stock.price > 0 ? (
-              <div className="font-mono text-sm font-semibold mt-0.5" style={{ color: "var(--v-ink)" }}>
-                {fmt$(stock.price)}
+      <div className="flex flex-col gap-3 px-3 @[420px]:px-5 pt-4 pb-6 w-full min-w-0">
+        <div className="flex flex-wrap gap-2.5">
+          <div
+            className="rounded-2xl border px-4 py-2.5 grid grid-cols-2 gap-x-6 w-[15.75rem]"
+            style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}
+          >
+            <div className="min-w-0">
+              <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>
+                {stock.marketState === "REGULAR" ? "Live" : "At Close"}
               </div>
-            ) : (
-              <TextSkeleton width="4rem" height="0.9rem" className="mt-1.5" />
-            )}
-          </div>
-          <div>
-            <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Change</div>
-            {stock.price > 0 ? (
-              <div
-                className="font-mono text-sm font-semibold mt-0.5"
-                style={{ color: stock.changePercent >= 0 ? G : R }}
-              >
-                {fmtChangeAmt(stock.change)} ({fmtPct(stock.changePercent)})
-              </div>
-            ) : (
-              <TextSkeleton width="5.5rem" height="0.9rem" className="mt-1.5" />
-            )}
-          </div>
-        </div>
-
-        {stock.preMarket && stock.preMarket.price > 0 && (
-          <div className="rounded-2xl border px-5 py-3 flex flex-wrap gap-x-8 gap-y-2" style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}>
-            <div>
-              <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Pre-Market</div>
-              <div className="font-mono text-sm font-semibold mt-0.5" style={{ color: "var(--v-ink)" }}>
-                {fmt$(stock.preMarket.price)}
-              </div>
-            </div>
-            <div>
-              <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Change</div>
-              <div
-                className="font-mono text-sm font-semibold mt-0.5"
-                style={{ color: stock.preMarket.changePercent >= 0 ? G : R }}
-              >
-                {fmtChangeAmt(stock.preMarket.change)} ({fmtPct(stock.preMarket.changePercent)})
-              </div>
-            </div>
-          </div>
-        )}
-
-        {stock.afterHours && stock.afterHours.price > 0 && (
-          <div className="rounded-2xl border px-5 py-3 flex flex-wrap gap-x-8 gap-y-2" style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}>
-            <div>
-              <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>After Hours</div>
-              <div className="font-mono text-sm font-semibold mt-0.5" style={{ color: "var(--v-ink)" }}>
-                {fmt$(stock.afterHours.price)}
-              </div>
-            </div>
-            <div>
-              <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Change</div>
-              <div
-                className="font-mono text-sm font-semibold mt-0.5"
-                style={{ color: stock.afterHours.changePercent >= 0 ? G : R }}
-              >
-                {fmtChangeAmt(stock.afterHours.change)} ({fmtPct(stock.afterHours.changePercent)})
-              </div>
-            </div>
-          </div>
-        )}
-
-        {holding && (
-          <div className="rounded-2xl border px-5 py-3 flex flex-wrap gap-x-8 gap-y-2" style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}>
-            <div>
-              <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Owned</div>
-              <div className="font-mono text-sm font-semibold mt-0.5" style={{ color: "var(--v-ink)" }}>
-                {holding.shares.toLocaleString("en-US", { maximumFractionDigits: 4 })} shares
-              </div>
-            </div>
-            <div>
-              <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Avg cost</div>
-              <div className="font-mono text-sm font-semibold mt-0.5" style={{ color: "var(--v-ink)" }}>{fmt$(holding.avgCost)}</div>
-            </div>
-            <div>
-              <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Profit</div>
-              <div className="font-mono text-sm font-semibold mt-0.5" style={{ color: profit >= 0 ? G : R }}>
-                {profit >= 0 ? "+" : ""}{fmt$(profit)}
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div className="px-5 pt-5">
-        <div className="flex justify-end mb-3">
-          <RangePicker range={range} setRange={onRangeChange} ranges={DETAIL_RANGES} />
-        </div>
-        <DetailChart symbol={stock.symbol} range={range} isGain={isGain} lastPrice={stock.price} />
-      </div>
-
-      <div className="mx-5 mt-4 rounded-2xl border p-5" style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}>
-        <div className="text-[9px] font-mono uppercase tracking-[0.15em] mb-4" style={{ color: "var(--v-ink-dim)" }}>Today</div>
-        <div className="grid grid-cols-3 sm:grid-cols-6 gap-x-6 gap-y-5">
-          <StatCell label="Open"    value={fmt$(stock.open)}        />
-          <StatCell label="High"    value={fmt$(stock.dayHigh)}     />
-          <StatCell label="Low"     value={fmt$(stock.dayLow)}      />
-          <StatCell label="Volume"  value={fmtVol(stock.volume)}    />
-          <StatCell label="Avg Vol" value={fmtVol(stock.avgVolume)} />
-          <StatCell label="Sector"  value={stock.sector}            />
-        </div>
-      </div>
-
-      <div className="mx-5 mt-3 rounded-2xl border p-5" style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}>
-        <div className="text-[9px] font-mono uppercase tracking-[0.15em] mb-4" style={{ color: "var(--v-ink-dim)" }}>Fundamentals</div>
-        <div className="grid grid-cols-3 sm:grid-cols-6 gap-x-6 gap-y-5">
-          <StatCell label="Market Cap" value={fmtCap(stock.marketCap)} />
-          <StatCell label="P/E"        value={stock.pe  != null ? stock.pe.toFixed(1) : "—"} />
-          <StatCell label="EPS"        value={stock.eps != null ? fmt$(stock.eps)      : "—"} />
-          <StatCell label="52W High"   value={fmt$(stock.high52w)} />
-          <StatCell label="52W Low"    value={fmt$(stock.low52w)}  />
-          <StatCell label="Div Yield"  value={stock.dividendYield != null ? stock.dividendYield.toFixed(2) + "%" : "—"} />
-        </div>
-
-        <div className="mt-6">
-          <div className="text-[9px] font-mono uppercase tracking-[0.15em] mb-2.5" style={{ color: "var(--v-ink-dim)" }}>52-Week Range</div>
-          <div className="flex items-center gap-3">
-            <span className="text-[11px] font-mono w-16 text-right flex-shrink-0" style={{ color: "var(--v-ink-dim)" }}>{fmt$(stock.low52w)}</span>
-            <div className="flex-1 relative h-1.5 rounded-full" style={{ background: "var(--v-line-strong)" }}>
-              <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: pct52 + "%", background: isGain ? G : R }} />
-              <div
-                className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full border-2 shadow"
-                style={{ left: `calc(${pct52}% - 6px)`, borderColor: isGain ? G : R, background: "var(--v-panel)" }}
-              />
-            </div>
-            <span className="text-[11px] font-mono w-16 flex-shrink-0" style={{ color: "var(--v-ink-dim)" }}>{fmt$(stock.high52w)}</span>
-          </div>
-          <div className="flex justify-center mt-1.5">
-            <span className="text-[10px] font-mono" style={{ color: isGain ? G : R }}>▲ Current: {fmt$(stock.price)}</span>
-          </div>
-        </div>
-      </div>
-
-      <div
-        className="mx-5 mt-3 rounded-2xl border flex-shrink-0"
-        style={{ background: "var(--v-panel)", borderColor: "var(--v-line-strong)" }}
-        data-testid="stock-news"
-      >
-        <div className="px-5 py-3 border-b flex items-center justify-between gap-2" style={{ borderColor: "var(--v-line)" }}>
-          <div className="flex items-center gap-2">
-            <Newspaper size={14} style={{ color: G }} />
-            <div className="text-[11px] font-mono uppercase tracking-[0.12em] font-semibold" style={{ color: "var(--v-ink)" }}>
-              Live news
-            </div>
-          </div>
-          <div className="text-[10px] font-mono" style={{ color: "var(--v-ink-dim)" }}>
-            {newsStatus === "loading" ? "loading…"
-              : newsStatus === "live" ? `${news.length} headline${news.length === 1 ? "" : "s"}`
-              : newsStatus === "error" ? "unavailable"
-              : "none"}
-          </div>
-        </div>
-        {newsStatus === "loading" && (
-          <div className="flex flex-col gap-0">
-            {[0, 1, 2].map(i => (
-              <div key={i} className="flex gap-3 px-4 py-3 border-b last:border-b-0" style={{ borderColor: "var(--v-line)" }}>
-                <div
-                  className="h-16 w-24 rounded-lg flex-shrink-0"
-                  style={{ background: "var(--v-line-strong)" }}
-                />
-                <div className="flex-1 flex flex-col gap-2 justify-center">
-                  <div className="h-3 rounded" style={{ width: "90%", background: "var(--v-line-strong)" }} />
-                  <div className="h-3 rounded" style={{ width: "60%", background: "var(--v-line-strong)" }} />
+              {stock.price > 0 ? (
+                <div className="font-mono text-sm font-semibold mt-0.5 tabular-nums" style={{ color: "var(--v-ink)" }}>
+                  {fmt$(stock.price)}
                 </div>
-              </div>
-            ))}
-          </div>
-        )}
-        {newsStatus === "error" && (
-          <div className="px-5 py-6 text-center text-sm font-mono" style={{ color: "var(--v-ink-dim)" }}>
-            News unavailable
-          </div>
-        )}
-        {newsStatus === "empty" && (
-          <div className="px-5 py-6 text-center text-sm font-mono" style={{ color: "var(--v-ink-dim)" }}>
-            No recent headlines
-          </div>
-        )}
-        {newsStatus === "live" && (
-          <div className="flex flex-col">
-            {news.map((item, idx) => (
-              <a
-                key={item.id || `${item.url}-${idx}`}
-                href={item.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex gap-3 px-4 py-3.5 transition-colors hover:bg-white/5 border-b last:border-b-0"
-                style={{ borderColor: "var(--v-line)" }}
-              >
+              ) : (
+                <TextSkeleton width="4rem" height="0.9rem" className="mt-1.5" />
+              )}
+            </div>
+            <div className="min-w-0">
+              <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Change</div>
+              {stock.price > 0 ? (
                 <div
-                  className="h-16 w-24 rounded-lg overflow-hidden flex-shrink-0 border flex items-center justify-center"
-                  style={{ background: "var(--v-line)", borderColor: "var(--v-line-strong)" }}
+                  className="font-mono text-sm font-semibold mt-0.5 tabular-nums"
+                  style={{ color: stock.changePercent >= 0 ? G : R }}
                 >
-                  {item.image ? (
-                    <img
-                      src={item.image}
-                      alt=""
-                      className="w-full h-full object-cover"
-                      loading="lazy"
-                      referrerPolicy="no-referrer"
-                      onError={e => {
-                        const el = e.currentTarget;
-                        if (item.rawImage && el.dataset.fallback !== "1") {
-                          el.dataset.fallback = "1";
-                          el.src = item.rawImage;
-                          return;
-                        }
-                        el.style.visibility = "hidden";
-                      }}
-                    />
-                  ) : (
-                    <Newspaper size={18} style={{ color: "var(--v-ink-dim)" }} />
-                  )}
+                  {fmtChangeAmt(stock.change)} ({fmtPct(stock.changePercent)})
                 </div>
-                <div className="min-w-0 flex-1 self-center">
-                  <div className="text-[13px] font-medium leading-snug" style={{ color: "var(--v-ink)" }}>
-                    {item.title}
-                  </div>
-                  <div className="mt-1.5 flex items-center gap-1.5 text-[11px] font-mono" style={{ color: "var(--v-ink-dim)" }}>
-                    <span className="truncate">{item.publisher || "Yahoo Finance"}</span>
-                    <ExternalLink size={10} className="flex-shrink-0 opacity-70" />
-                  </div>
-                </div>
-              </a>
-            ))}
+              ) : (
+                <TextSkeleton width="5.5rem" height="0.9rem" className="mt-1.5" />
+              )}
+            </div>
           </div>
-        )}
-      </div>
 
-      <div
-        className="mx-5 mt-3 mb-6 px-4 py-3 rounded-xl text-[11px] font-mono"
-        style={{ background: "var(--v-line)", color: "var(--v-ink-dim)" }}
-      >
-        Live market data via yfinance
+          {stock.preMarket && stock.preMarket.price > 0 && (
+            <div
+              className="rounded-2xl border px-4 py-2.5 grid grid-cols-2 gap-x-6 w-[15.75rem]"
+              style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}
+            >
+              <div className="min-w-0">
+                <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Pre-Market</div>
+                <div className="font-mono text-sm font-semibold mt-0.5 tabular-nums" style={{ color: "var(--v-ink)" }}>
+                  {fmt$(stock.preMarket.price)}
+                </div>
+              </div>
+              <div className="min-w-0">
+                <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Change</div>
+                <div
+                  className="font-mono text-sm font-semibold mt-0.5 tabular-nums"
+                  style={{ color: stock.preMarket.changePercent >= 0 ? G : R }}
+                >
+                  {fmtChangeAmt(stock.preMarket.change)} ({fmtPct(stock.preMarket.changePercent)})
+                </div>
+              </div>
+            </div>
+          )}
+
+          {stock.afterHours && stock.afterHours.price > 0 && (
+            <div
+              className="rounded-2xl border px-4 py-2.5 grid grid-cols-2 gap-x-6 w-[15.75rem]"
+              style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}
+            >
+              <div className="min-w-0">
+                <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>After Hours</div>
+                <div className="font-mono text-sm font-semibold mt-0.5 tabular-nums" style={{ color: "var(--v-ink)" }}>
+                  {fmt$(stock.afterHours.price)}
+                </div>
+              </div>
+              <div className="min-w-0">
+                <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Change</div>
+                <div
+                  className="font-mono text-sm font-semibold mt-0.5 tabular-nums"
+                  style={{ color: stock.afterHours.changePercent >= 0 ? G : R }}
+                >
+                  {fmtChangeAmt(stock.afterHours.change)} ({fmtPct(stock.afterHours.changePercent)})
+                </div>
+              </div>
+            </div>
+          )}
+
+          {holding && (
+            <div
+              className="rounded-2xl border px-4 py-2.5 grid grid-cols-3 gap-x-5 w-[22.5rem]"
+              style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}
+            >
+              <div className="min-w-0">
+                <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Owned</div>
+                <div className="font-mono text-sm font-semibold mt-0.5 tabular-nums" style={{ color: "var(--v-ink)" }}>
+                  {holding.shares.toLocaleString("en-US", { maximumFractionDigits: 4 })} shares
+                </div>
+              </div>
+              <div className="min-w-0">
+                <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Avg cost</div>
+                <div className="font-mono text-sm font-semibold mt-0.5 tabular-nums" style={{ color: "var(--v-ink)" }}>{fmt$(holding.avgCost)}</div>
+              </div>
+              <div className="min-w-0">
+                <div className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "var(--v-ink-dim)" }}>Profit</div>
+                <div className="font-mono text-sm font-semibold mt-0.5 tabular-nums" style={{ color: profit >= 0 ? G : R }}>
+                  {profit >= 0 ? "+" : ""}{fmt$(profit)}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Wide: Today/Fundamentals beside chart. Narrow: stacked under chart. */}
+        <div className="flex flex-col @[640px]:flex-row @[640px]:items-start gap-3 min-w-0">
+          <div className="flex-1 min-w-0">
+            <div className="flex justify-end mb-2 overflow-x-auto no-scrollbar">
+              <RangePicker range={range} setRange={onRangeChange} ranges={DETAIL_RANGES} />
+            </div>
+            <DetailChart symbol={stock.symbol} range={range} isGain={isGain} lastPrice={stock.price} />
+          </div>
+
+          <div className="w-full @[640px]:w-[19.5rem] flex-shrink-0 flex flex-col gap-3">
+            <div className="rounded-2xl border p-4" style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}>
+              <div className="text-[9px] font-mono uppercase tracking-[0.15em] mb-3" style={{ color: "var(--v-ink-dim)" }}>Today</div>
+              <div className="grid grid-cols-3 gap-x-4 gap-y-4">
+                <StatCell label="Open"    value={fmt$(stock.open)}        />
+                <StatCell label="High"    value={fmt$(stock.dayHigh)}     />
+                <StatCell label="Low"     value={fmt$(stock.dayLow)}      />
+                <StatCell label="Volume"  value={fmtVol(stock.volume)}    />
+                <StatCell label="Avg Vol" value={fmtVol(stock.avgVolume)} />
+                <StatCell label="Sector"  value={stock.sector}            />
+              </div>
+            </div>
+
+            <div className="rounded-2xl border p-4" style={{ background: "var(--v-panel)", borderColor: "var(--v-line)" }}>
+              <div className="text-[9px] font-mono uppercase tracking-[0.15em] mb-3" style={{ color: "var(--v-ink-dim)" }}>Fundamentals</div>
+              <div className="grid grid-cols-3 gap-x-4 gap-y-4">
+                <StatCell label="Market Cap" value={fmtCap(stock.marketCap)} />
+                <StatCell label="P/E"        value={stock.pe  != null ? stock.pe.toFixed(1) : "—"} />
+                <StatCell label="EPS"        value={stock.eps != null ? fmt$(stock.eps)      : "—"} />
+                <StatCell label="52W High"   value={fmt$(stock.high52w)} />
+                <StatCell label="52W Low"    value={fmt$(stock.low52w)}  />
+                <StatCell label="Div Yield"  value={stock.dividendYield != null ? stock.dividendYield.toFixed(2) + "%" : "—"} />
+              </div>
+
+              <div className="mt-5">
+                <div className="text-[9px] font-mono uppercase tracking-[0.15em] mb-2.5" style={{ color: "var(--v-ink-dim)" }}>52-Week Range</div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono w-14 text-right flex-shrink-0 tabular-nums" style={{ color: "var(--v-ink-dim)" }}>{fmt$(stock.low52w)}</span>
+                  <div className="flex-1 relative h-1.5 rounded-full" style={{ background: "var(--v-line-strong)" }}>
+                    <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: pct52 + "%", background: isGain ? G : R }} />
+                    <div
+                      className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full border-2 shadow"
+                      style={{ left: `calc(${pct52}% - 6px)`, borderColor: isGain ? G : R, background: "var(--v-panel)" }}
+                    />
+                  </div>
+                  <span className="text-[10px] font-mono w-14 flex-shrink-0 tabular-nums" style={{ color: "var(--v-ink-dim)" }}>{fmt$(stock.high52w)}</span>
+                </div>
+                <div className="flex justify-center mt-1.5">
+                  <span className="text-[10px] font-mono tabular-nums" style={{ color: isGain ? G : R }}>▲ Current: {fmt$(stock.price)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div
+          className="rounded-2xl border flex-shrink-0"
+          style={{ background: "var(--v-panel)", borderColor: "var(--v-line-strong)" }}
+          data-testid="stock-news"
+        >
+          <div className="px-4 py-3 border-b flex items-center justify-between gap-2" style={{ borderColor: "var(--v-line)" }}>
+            <div className="flex items-center gap-2">
+              <Newspaper size={14} style={{ color: G }} />
+              <div className="text-[11px] font-mono uppercase tracking-[0.12em] font-semibold" style={{ color: "var(--v-ink)" }}>
+                Live news
+              </div>
+            </div>
+            <div className="text-[10px] font-mono" style={{ color: "var(--v-ink-dim)" }}>
+              {newsStatus === "loading" ? "loading…"
+                : newsStatus === "live" ? `${news.length} headline${news.length === 1 ? "" : "s"}`
+                : newsStatus === "error" ? "unavailable"
+                : "none"}
+            </div>
+          </div>
+          {newsStatus === "loading" && (
+            <div className="flex flex-col gap-0">
+              {[0, 1, 2].map(i => (
+                <div key={i} className="flex gap-3 px-3 py-3 border-b last:border-b-0" style={{ borderColor: "var(--v-line)" }}>
+                  <div
+                    className="h-14 w-20 rounded-lg flex-shrink-0"
+                    style={{ background: "var(--v-line-strong)" }}
+                  />
+                  <div className="flex-1 flex flex-col gap-2 justify-center">
+                    <div className="h-3 rounded" style={{ width: "90%", background: "var(--v-line-strong)" }} />
+                    <div className="h-3 rounded" style={{ width: "60%", background: "var(--v-line-strong)" }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {newsStatus === "error" && (
+            <div className="px-4 py-6 text-center text-sm font-mono" style={{ color: "var(--v-ink-dim)" }}>
+              News unavailable
+            </div>
+          )}
+          {newsStatus === "empty" && (
+            <div className="px-4 py-6 text-center text-sm font-mono" style={{ color: "var(--v-ink-dim)" }}>
+              No recent headlines
+            </div>
+          )}
+          {newsStatus === "live" && (
+            <div className="flex flex-col">
+              {news.map((item, idx) => (
+                <a
+                  key={item.id || `${item.url}-${idx}`}
+                  href={item.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex gap-3 px-3 py-3 transition-colors hover:bg-white/5 border-b last:border-b-0"
+                  style={{ borderColor: "var(--v-line)" }}
+                >
+                  <div
+                    className="h-14 w-20 rounded-lg overflow-hidden flex-shrink-0 border flex items-center justify-center"
+                    style={{ background: "var(--v-line)", borderColor: "var(--v-line-strong)" }}
+                  >
+                    {item.image ? (
+                      <img
+                        src={item.image}
+                        alt=""
+                        className="w-full h-full object-cover"
+                        loading="lazy"
+                        referrerPolicy="no-referrer"
+                        onError={e => {
+                          const el = e.currentTarget;
+                          if (item.rawImage && el.dataset.fallback !== "1") {
+                            el.dataset.fallback = "1";
+                            el.src = item.rawImage;
+                            return;
+                          }
+                          el.style.visibility = "hidden";
+                        }}
+                      />
+                    ) : (
+                      <Newspaper size={18} style={{ color: "var(--v-ink-dim)" }} />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1 self-center">
+                    <div className="text-[12px] font-medium leading-snug" style={{ color: "var(--v-ink)" }}>
+                      {item.title}
+                    </div>
+                    <div className="mt-1 flex items-center gap-1.5 text-[10px] font-mono" style={{ color: "var(--v-ink-dim)" }}>
+                      <span className="truncate">{item.publisher || "Yahoo Finance"}</span>
+                      <ExternalLink size={10} className="flex-shrink-0 opacity-70" />
+                    </div>
+                  </div>
+                </a>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div
+          className="px-3 py-2.5 rounded-xl text-[11px] font-mono"
+          style={{ background: "var(--v-line)", color: "var(--v-ink-dim)" }}
+        >
+          Live market data via yfinance
+        </div>
       </div>
 
       {buyOpen && (
