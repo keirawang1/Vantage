@@ -82,6 +82,8 @@ export interface UserState {
   setupComplete?: boolean;
   watchlists: unknown[];
   prefs: UserPrefs;
+  priceAlerts: unknown[];
+  notifications: unknown[];
 }
 
 export const DEFAULT_PREFS: UserPrefs = {

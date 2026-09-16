@@ -23,6 +23,8 @@ service cloud.firestore {
     //       detailRanges: map of string -> string
     //   - setupComplete: bool (optional)
     //   - updatedAt: timestamp (optional)
+    //   - priceAlerts: list (required, <= 80)
+    //   - notifications: list (required, <= 80)
     //
     // ===============================================================
 
@@ -72,17 +74,20 @@ service cloud.firestore {
     function isValidUserState(data) {
       return data.keys().hasOnly([
           'balance', 'holdings', 'transactions', 'profile',
-          'watchlists', 'prefs', 'setupComplete', 'updatedAt'
+          'watchlists', 'prefs', 'setupComplete', 'updatedAt',
+          'priceAlerts', 'notifications'
         ]) &&
         data.keys().hasAll([
           'balance', 'holdings', 'transactions', 'profile',
-          'watchlists', 'prefs'
+          'watchlists', 'prefs', 'priceAlerts', 'notifications'
         ]) &&
         data.balance is number &&
         data.balance >= 0 && data.balance <= 1000000000000 &&
         data.holdings is list && data.holdings.size() <= 500 &&
         data.transactions is list && data.transactions.size() <= 2000 &&
         data.watchlists is list && data.watchlists.size() <= 50 &&
+        data.priceAlerts is list && data.priceAlerts.size() <= 80 &&
+        data.notifications is list && data.notifications.size() <= 80 &&
         isValidProfile(data.profile) &&
         isValidPrefs(data.prefs) &&
         (!('setupComplete' in data) || data.setupComplete is bool) &&

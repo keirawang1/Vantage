@@ -5,7 +5,7 @@ import {
 } from "recharts";
 import {
   Search, Sun, Moon, Plus, ChevronLeft, ChevronRight, ChevronDown, Filter, ArrowUpDown,
-  X, Check, TrendingUp, TrendingDown, Star, BarChart2, Minus,
+  X, Check, TrendingUp, TrendingDown, Star, BarChart2, Minus, Bell,
   MoreHorizontal, LayoutGrid, List, Landmark, Wallet, Settings,
   Eye, EyeOff, User as UserIcon, ExternalLink, Newspaper,
 } from "lucide-react";
@@ -19,6 +19,12 @@ import {
 import { loadUserState, saveUserState, subscribeAuth, signIn, signUp, signOut, deleteAccount, authErrorMessage, DEFAULT_PREFS, type UserState, type UserPrefs } from "./lib/firebase";
 import type { User } from "firebase/auth";
 import { VantageChat } from "./components/VantageChat";
+import { NotificationCenter } from "./components/NotificationCenter";
+import {
+  evaluateAlerts, loadLocalAlerts, loadLocalNotifications, mergeNotifications,
+  parseNotifications, parsePriceAlerts, pushBrowserNotification, requestAlertPermission,
+  type AlertAction, type AppNotification, type PriceAlert,
+} from "./lib/alerts";
 
 // ─── Palette ───────────────────────────────────────────────────────────────────
 
@@ -156,6 +162,7 @@ const DEFAULT_PROFILE: Profile = {
 const TIME_RANGES: TimeRange[] = ["1D", "1W", "1M", "3M", "6M", "YTD", "1Y", "2Y", "5Y", "10Y", "ALL"];
 const FILTER_MODES: FilterMode[] = ["all", "gainers", "losers", "movers", "owned"];
 const SORT_MODES: SortMode[] = ["manual", "change", "changeAmt", "price", "cap", "volume", "symbol", "name"];
+const firedAlertIds = new Set<string>();
 
 function asWatchlists(raw: unknown): Watchlist[] | null {
   if (!Array.isArray(raw) || raw.length === 0) return null;
@@ -466,10 +473,11 @@ function CardMenu({
 // ─── TradeMenu (portfolio card ⋮) ──────────────────────────────────────────────
 
 function TradeMenu({
-  onBuy, onSell, onClose,
+  onBuy, onSell, onSetAlert, onClose,
 }: {
   onBuy: () => void;
   onSell: () => void;
+  onSetAlert: () => void;
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -503,6 +511,14 @@ function TradeMenu({
       >
         <Minus size={11} style={{ color: R, flexShrink: 0 }} />
         Sell shares
+      </button>
+      <button
+        className="w-full text-left px-3 py-2 text-xs flex items-center gap-2.5 transition-colors hover:bg-white/5"
+        style={{ color: "var(--v-ink)" }}
+        onClick={() => { onSetAlert(); onClose(); }}
+      >
+        <Bell size={11} style={{ color: G, flexShrink: 0 }} />
+        Set alert
       </button>
     </div>
   );
@@ -821,7 +837,7 @@ function SearchDropdown({
 
 function StockCard({
   stock, range, watchlists, isPinned, isDraggable, isDragOver,
-  holding, onSelect, onToggleWatchlist, onTogglePin, onTrade,
+  holding, onSelect, onToggleWatchlist, onTogglePin, onTrade, onSetAlert,
   onDragStart, onDragOver, onDragEnd, refreshKey = 0, changeDisplay = "percent",
 }: {
   stock: StockMeta; range: TimeRange; watchlists: Watchlist[];
@@ -830,6 +846,7 @@ function StockCard({
   refreshKey?: number;
   changeDisplay?: ChangeDisplay;
   onTrade?: (symbol: string, mode: "buy" | "sell") => void;
+  onSetAlert?: (symbol: string) => void;
   onSelect: () => void;
   onToggleWatchlist: (watchlistId: string, symbol: string) => void;
   onTogglePin: (symbol: string) => void;
@@ -886,6 +903,7 @@ function StockCard({
             <TradeMenu
               onBuy={() => onTrade?.(stock.symbol, "buy")}
               onSell={() => onTrade?.(stock.symbol, "sell")}
+              onSetAlert={() => onSetAlert?.(stock.symbol)}
               onClose={() => setMenuOpen(false)}
             />
           ) : (
@@ -1294,7 +1312,7 @@ function HoldingListHeader({
 
 function HoldingRow({
   stock, holding, range, watchlists, isPinned,
-  onSelect, onToggleWatchlist, onTogglePin,
+  onSelect, onToggleWatchlist, onTogglePin, onTrade, onSetAlert,
   refreshKey = 0, changeDisplay = "percent",
 }: {
   stock: StockMeta;
@@ -1307,6 +1325,8 @@ function HoldingRow({
   onSelect: () => void;
   onToggleWatchlist: (watchlistId: string, symbol: string) => void;
   onTogglePin: (symbol: string) => void;
+  onTrade?: (symbol: string, mode: "buy" | "sell") => void;
+  onSetAlert?: (symbol: string) => void;
 }) {
   const delta = useRangeChange(stock.symbol, range, stock, refreshKey);
   const isGain = delta.changePercent >= 0;
@@ -1394,12 +1414,10 @@ function HoldingRow({
           <MoreHorizontal size={12} style={{ color: "var(--v-ink-soft)" }} />
         </button>
         {menuOpen && (
-          <CardMenu
-            symbol={stock.symbol}
-            watchlists={watchlists}
-            isPinned={isPinned}
-            onTogglePin={() => onTogglePin(stock.symbol)}
-            onToggleWatchlist={id => onToggleWatchlist(id, stock.symbol)}
+          <TradeMenu
+            onBuy={() => onTrade?.(stock.symbol, "buy")}
+            onSell={() => onTrade?.(stock.symbol, "sell")}
+            onSetAlert={() => onSetAlert?.(stock.symbol)}
             onClose={() => setMenuOpen(false)}
           />
         )}
@@ -2016,13 +2034,18 @@ function DetailChart({ symbol, range, isGain, lastPrice }: { symbol: string; ran
   const gradId = `dc-${uid}`;
   const wrapRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
+  const [hostH, setHostH] = useState(0);
 
   useLayoutEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width));
+    const ro = new ResizeObserver(([entry]) => {
+      setWidth(entry.contentRect.width);
+      setHostH(entry.contentRect.height);
+    });
     ro.observe(el);
     setWidth(el.clientWidth);
+    setHostH(el.clientHeight);
     return () => ro.disconnect();
   }, []);
 
@@ -2049,6 +2072,7 @@ function DetailChart({ symbol, range, isGain, lastPrice }: { symbol: string; ran
   const narrow = width > 0 && width < 360;
   const compact = width > 0 && width < 480;
   const chartH = narrow ? 180 : compact ? 210 : 260;
+  const renderH = hostH > chartH + 8 ? Math.round(hostH) : chartH;
   const yAxisW = narrow ? 36 : compact ? 44 : 56;
   const chartMargin = narrow
     ? { top: 4, right: 2, bottom: 16, left: 0 }
@@ -2074,23 +2098,23 @@ function DetailChart({ symbol, range, isGain, lastPrice }: { symbol: string; ran
 
   if (loading) {
     return (
-      <div ref={wrapRef}>
-        <ChartSkeleton height={chartH || 220} />
+      <div ref={wrapRef} className="w-full h-full" style={{ minHeight: chartH || 220 }}>
+        <ChartSkeleton height={renderH || 220} />
       </div>
     );
   }
 
   if (data.length < 2) {
     return (
-      <div ref={wrapRef} className="flex items-center justify-center font-mono text-xs" style={{ height: chartH || 220, color: "var(--v-ink-dim)" }}>
+      <div ref={wrapRef} className="flex items-center justify-center font-mono text-xs w-full h-full" style={{ minHeight: chartH || 220, color: "var(--v-ink-dim)" }}>
         No chart data
       </div>
     );
   }
 
   return (
-    <div ref={wrapRef}>
-      <ResponsiveContainer width="100%" height={chartH}>
+    <div ref={wrapRef} className="w-full h-full" style={{ minHeight: chartH }}>
+      <ResponsiveContainer width="100%" height={renderH}>
         <AreaChart data={indexed} margin={chartMargin}>
           <defs>
             <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
@@ -2419,10 +2443,159 @@ function SellSharesDialog({
   );
 }
 
+function SetAlertDialog({
+  stock, holding, balance, onClose, onSave,
+}: {
+  stock: StockMeta;
+  holding?: Holding;
+  balance: number;
+  onClose: () => void;
+  onSave: (alert: Omit<PriceAlert, "id" | "status" | "createdAt">) => void;
+}) {
+  const [raw, setRaw] = useState("");
+  const [action, setAction] = useState<AlertAction>("notify");
+  const [shareRaw, setShareRaw] = useState(holding && holding.shares > 0 ? String(holding.shares) : "1");
+  const target = parseFloat(raw);
+  const shares = parseFloat(shareRaw);
+  const validTarget = Number.isFinite(target) && target > 0 && stock.price > 0 && Math.abs(target - stock.price) >= 0.01;
+  const direction = validTarget ? (target > stock.price ? "above" as const : "below" as const) : "above";
+  const owned = holding?.shares ?? 0;
+  const sharesOk = action === "notify"
+    || (Number.isFinite(shares) && shares > 0 && (action !== "sell" || shares <= owned + 1e-9));
+  const valid = validTarget && sharesOk;
+
+  return (
+    <DialogShell
+      title={`Alert ${stock.symbol}`}
+      onClose={onClose}
+      footer={
+        <>
+          <button
+            className="px-3.5 py-2 rounded-lg text-xs font-medium transition-colors hover:bg-white/5"
+            style={{ color: "var(--v-ink-soft)" }}
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+          <button
+            className="px-4 py-2 rounded-lg text-xs font-semibold transition-opacity disabled:opacity-40"
+            style={{ background: G, color: "#0a0a0a" }}
+            disabled={!valid}
+            onClick={() => {
+              if (!valid) return;
+              onSave({
+                symbol: stock.symbol,
+                targetPrice: target,
+                direction,
+                action,
+                shares: action === "notify" ? 0 : shares,
+                createdPrice: stock.price,
+              });
+              onClose();
+            }}
+          >
+            Set alert
+          </button>
+        </>
+      }
+    >
+      <div className="flex justify-between text-xs mb-4 font-mono" style={{ color: "var(--v-ink-soft)" }}>
+        <span>Now {fmt$(stock.price)}</span>
+        <span>Bank {fmt$(balance)}</span>
+      </div>
+      <label className="block text-[10px] font-mono uppercase tracking-widest mb-2" style={{ color: "var(--v-ink-dim)" }}>
+        Price target
+      </label>
+      <div className="relative">
+        <span className="absolute left-3 top-1/2 -translate-y-1/2 font-mono text-sm" style={{ color: "var(--v-ink-dim)" }}>$</span>
+        <input
+          autoFocus
+          type="number"
+          min="0"
+          step="0.01"
+          value={raw}
+          onChange={e => setRaw(e.target.value)}
+          placeholder={stock.price > 0 ? stock.price.toFixed(2) : "0.00"}
+          className="w-full pl-7 pr-3 py-2.5 rounded-xl text-sm font-mono outline-none"
+          style={{ background: "var(--v-line)", color: "var(--v-ink)", border: "1px solid var(--v-line-strong)" }}
+        />
+      </div>
+      {raw !== "" && Number.isFinite(target) && stock.price > 0 && (
+        <div className="mt-2 text-[11px] font-mono" style={{ color: validTarget ? "var(--v-ink-dim)" : R }}>
+          {!validTarget
+            ? "Pick a price above or below the current quote"
+            : `Fires when ${stock.symbol} ${direction === "above" ? "rises to" : "falls to"} ${fmt$(target)}`}
+        </div>
+      )}
+
+      <div className="mt-4 text-[10px] font-mono uppercase tracking-widest mb-2" style={{ color: "var(--v-ink-dim)" }}>
+        When it hits
+      </div>
+      <div className="grid grid-cols-3 gap-1.5">
+        {([
+          ["notify", "Alert only"],
+          ["buy", "Auto-buy"],
+          ["sell", "Auto-sell"],
+        ] as const).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            className="px-2 py-2 rounded-lg text-[11px] font-semibold"
+            style={{
+              background: action === id ? (id === "sell" ? R : G) : "var(--v-line)",
+              color: action === id ? "#0a0a0a" : "var(--v-ink-soft)",
+            }}
+            onClick={() => setAction(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {action !== "notify" && (
+        <>
+          <label className="block text-[10px] font-mono uppercase tracking-widest mt-4 mb-2" style={{ color: "var(--v-ink-dim)" }}>
+            Shares
+          </label>
+          <div className="relative">
+            <input
+              type="number"
+              min="0"
+              step="any"
+              value={shareRaw}
+              onChange={e => setShareRaw(e.target.value)}
+              className="w-full px-3 py-2.5 pr-14 rounded-xl text-sm font-mono outline-none"
+              style={{ background: "var(--v-line)", color: "var(--v-ink)", border: "1px solid var(--v-line-strong)" }}
+            />
+            {action === "sell" && owned > 0 && (
+              <button
+                type="button"
+                className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-1 rounded-md text-[10px] font-mono font-semibold hover:bg-white/10"
+                style={{ background: "var(--v-line-strong)", color: "var(--v-ink-soft)" }}
+                onClick={() => setShareRaw(String(holding?.shares ?? 0))}
+              >
+                MAX
+              </button>
+            )}
+          </div>
+          {action === "sell" && owned <= 0 && (
+            <div className="mt-2 text-[11px] font-mono" style={{ color: R }}>No shares to sell</div>
+          )}
+          {action === "sell" && owned > 0 && Number.isFinite(shares) && shares > owned && (
+            <div className="mt-2 text-[11px] font-mono" style={{ color: R }}>
+              You only own {owned.toLocaleString("en-US", { maximumFractionDigits: 4 })} shares
+            </div>
+          )}
+        </>
+      )}
+    </DialogShell>
+  );
+}
+
 // ─── StockDetailView ───────────────────────────────────────────────────────────
 
 function StockDetailView({
-  stock, range, holding, balance, onBack, onRangeChange, onBuy, onSell, signedIn, onSignIn,
+  stock, range, holding, balance, onBack, onRangeChange, onBuy, onSell, onSetAlert, signedIn, onSignIn,
 }: {
   stock: StockMeta;
   range: TimeRange;
@@ -2432,6 +2605,7 @@ function StockDetailView({
   onRangeChange: (r: TimeRange) => void;
   onBuy: (shares: number) => void;
   onSell: (shares: number) => void;
+  onSetAlert: () => void;
   signedIn: boolean;
   onSignIn: () => void;
 }) {
@@ -2511,6 +2685,14 @@ function StockDetailView({
           >
             <Minus size={12} strokeWidth={2.5} />
             Sell
+          </button>
+          <button
+            className="px-2.5 @[420px]:px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition-opacity hover:opacity-90"
+            style={{ background: "var(--v-line-strong)", color: "var(--v-ink)" }}
+            onClick={onSetAlert}
+          >
+            <Bell size={12} strokeWidth={2.5} />
+            <span className="hidden @[360px]:inline">Set alert</span>
           </button>
         </div>
       </div>
@@ -2624,12 +2806,14 @@ function StockDetailView({
         </div>
 
         {/* Wide: Today/Fundamentals beside chart. Narrow: stacked under chart. */}
-        <div className="flex flex-col @[640px]:flex-row @[640px]:items-start gap-3 min-w-0">
-          <div className="flex-1 min-w-0">
-            <div className="flex justify-end mb-2 overflow-x-auto no-scrollbar">
+        <div className="flex flex-col @[640px]:flex-row @[640px]:items-stretch gap-3 min-w-0">
+          <div className="flex-1 min-w-0 flex flex-col">
+            <div className="flex justify-end mb-2 overflow-x-auto no-scrollbar flex-shrink-0">
               <RangePicker range={range} setRange={onRangeChange} ranges={DETAIL_RANGES} />
             </div>
-            <DetailChart symbol={stock.symbol} range={range} isGain={isGain} lastPrice={stock.price} />
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <DetailChart symbol={stock.symbol} range={range} isGain={isGain} lastPrice={stock.price} />
+            </div>
           </div>
 
           <div className="w-full @[640px]:w-[19.5rem] flex-shrink-0 flex flex-col gap-3">
@@ -3761,6 +3945,9 @@ export default function App() {
   );
   const [sparkEpoch,      setSparkEpoch]     = useState(0);
   const [tradeDialog,     setTradeDialog]    = useState<{ symbol: string; mode: "buy" | "sell" } | null>(null);
+  const [alertDialog,     setAlertDialog]    = useState<string | null>(null);
+  const [priceAlerts,     setPriceAlerts]    = useState<PriceAlert[]>(loadLocalAlerts);
+  const [notifications,   setNotifications]  = useState<AppNotification[]>(loadLocalNotifications);
 
   const dragSymbolRef = useRef<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
@@ -3809,7 +3996,20 @@ export default function App() {
           else setDataStatus("error");
         });
     }, 60_000);
-    return () => { cancelled = true; window.clearInterval(id); };
+    const refresh = () => {
+      fetchQuotes()
+        .then(live => { if (!cancelled) applyQuotes(live); })
+        .catch(() => {});
+    };
+    const onVis = () => { if (document.visibilityState === "visible") refresh(); };
+    window.addEventListener("online", refresh);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+      window.removeEventListener("online", refresh);
+      document.removeEventListener("visibilitychange", onVis);
+    };
   }, []);
 
   // When the toolbar range changes, load matching history for visible symbols
@@ -3825,6 +4025,8 @@ export default function App() {
   useEffect(() => { localStorage.setItem("vantage-holdings", JSON.stringify(holdings)); }, [holdings]);
   useEffect(() => { localStorage.setItem("vantage-tx", JSON.stringify(transactions)); }, [transactions]);
   useEffect(() => { localStorage.setItem("vantage-profile", JSON.stringify(profile)); }, [profile]);
+  useEffect(() => { localStorage.setItem("vantage-alerts", JSON.stringify(priceAlerts)); }, [priceAlerts]);
+  useEffect(() => { localStorage.setItem("vantage-notifications", JSON.stringify(notifications)); }, [notifications]);
 
   // ─── Auth + Firestore sync ────────────────────────────────────────────────────
   const cloudReady = useRef(false);
@@ -3850,8 +4052,10 @@ export default function App() {
       customOrders,
       detailRanges,
     },
+    priceAlerts,
+    notifications,
   }), [
-    balance, holdings, transactions, profile, watchlists,
+    balance, holdings, transactions, profile, watchlists, priceAlerts, notifications,
     homeRange, filter, sort, sortDir, changeDisplay, viewMode, theme,
     activeWatchlist, pinnedSymbols, customOrders, detailRanges,
   ]);
@@ -3899,6 +4103,9 @@ export default function App() {
     setViewMode("grid");
     setNeedsNameSetup(false);
     setSetupComplete(false);
+    setPriceAlerts([]);
+    setNotifications([]);
+    firedAlertIds.clear();
     cloudReady.current = false;
   }, [clearTradeData]);
 
@@ -3918,6 +4125,12 @@ export default function App() {
           if (typeof saved.balance === "number") setBalance(saved.balance);
           if (Array.isArray(saved.holdings)) setHoldings(saved.holdings as Holding[]);
           if (Array.isArray(saved.transactions)) setTransactions(saved.transactions as Transaction[]);
+          setPriceAlerts(parsePriceAlerts(saved.priceAlerts));
+          setNotifications(parseNotifications(saved.notifications));
+          firedAlertIds.clear();
+          for (const a of parsePriceAlerts(saved.priceAlerts)) {
+            if (a.status === "complete") firedAlertIds.add(a.id);
+          }
           setProfile({
             ...DEFAULT_PROFILE,
             ...saved.profile,
@@ -3984,6 +4197,9 @@ export default function App() {
     setChangeDisplay("percent");
     setViewMode("grid");
     clearTradeData();
+    setPriceAlerts([]);
+    setNotifications([]);
+    firedAlertIds.clear();
     setNeedsNameSetup(false);
     setSetupComplete(true);
     cloudReady.current = true;
@@ -3998,6 +4214,8 @@ export default function App() {
         ...DEFAULT_PREFS,
         activeWatchlist: "portfolio",
       },
+      priceAlerts: [],
+      notifications: [],
     });
     ensureQuotes(selectedSymbols)
       .then(live => setStocks([...live]))
@@ -4277,7 +4495,7 @@ export default function App() {
       return prev.map(h => h.symbol === symbol ? { symbol, shares: totalShares, avgCost } : h);
     });
     setTransactions(prev => [{
-      id: "tx-" + Date.now(),
+      id: "tx-" + Date.now() + "-b-" + symbol,
       type: "buy",
       amount: cost,
       symbol,
@@ -4296,7 +4514,7 @@ export default function App() {
       return remaining > 1e-9 ? [{ ...h, shares: remaining }] : [];
     }));
     setTransactions(prev => [{
-      id: "tx-" + Date.now(),
+      id: "tx-" + Date.now() + "-s-" + symbol,
       type: "sell",
       amount: proceeds,
       symbol,
@@ -4305,6 +4523,56 @@ export default function App() {
       timestamp: Date.now(),
     }, ...prev]);
   }, []);
+
+  const savePriceAlert = useCallback((draft: Omit<PriceAlert, "id" | "status" | "createdAt">) => {
+    void requestAlertPermission();
+    setPriceAlerts(prev => [{
+      ...draft,
+      id: "al-" + Date.now() + "-" + draft.symbol,
+      status: "pending" as const,
+      createdAt: Date.now(),
+    }, ...prev].slice(0, 80));
+  }, []);
+
+  const cancelPriceAlert = useCallback((id: string) => {
+    setPriceAlerts(prev => prev.filter(a => a.id !== id));
+  }, []);
+
+  const markNotificationRead = useCallback((id: string) => {
+    setNotifications(prev => prev.map(n => (n.id === id ? { ...n, read: true } : n)));
+  }, []);
+
+  const markAllNotificationsRead = useCallback(() => {
+    setNotifications(prev => prev.map(n => (n.read ? n : { ...n, read: true })));
+  }, []);
+
+  const pendingAlertSymbols = [...new Set(priceAlerts.filter(a => a.status === "pending").map(a => a.symbol))].sort().join(",");
+  useEffect(() => {
+    if (!pendingAlertSymbols) return;
+    ensureQuotes(pendingAlertSymbols.split(","))
+      .then(live => setStocks([...live]))
+      .catch(() => {});
+  }, [pendingAlertSymbols]);
+
+  useEffect(() => {
+    if (!priceAlerts.some(a => a.status === "pending")) return;
+    const { alerts, fired, trades } = evaluateAlerts({
+      alerts: priceAlerts,
+      stocks,
+      balance,
+      holdings,
+      skipIds: firedAlertIds,
+    });
+    if (!fired.length) return;
+    for (const n of fired) firedAlertIds.add(n.alertId);
+    setPriceAlerts(alerts);
+    setNotifications(prev => mergeNotifications(prev, fired));
+    for (const t of trades) {
+      if (t.type === "buy") buyShares(t.symbol, t.shares, t.price);
+      else sellShares(t.symbol, t.shares, t.price);
+    }
+    for (const n of fired) pushBrowserNotification(n.title, n.body);
+  }, [stocks, priceAlerts, balance, holdings, buyShares, sellShares]);
 
   const resetTradeHistory = useCallback(() => {
     setBalance(0);
@@ -4343,6 +4611,7 @@ export default function App() {
     refreshKey: sparkEpoch,
     changeDisplay,
     onTrade: (symbol: string, mode: "buy" | "sell") => setTradeDialog({ symbol, mode }),
+    onSetAlert: (symbol: string) => setAlertDialog(symbol),
     isPinned:  pinnedSymbols.includes(stock.symbol),
     isDraggable: isDraggable && !holding,
     isDragOver: dragOver === stock.symbol,
@@ -4397,6 +4666,14 @@ export default function App() {
           <span style={{ color: R }}>{lossCount}↓</span>
           <span className="ml-1.5" style={{ color: "var(--v-ink-dim)" }}>All Stocks</span>
         </div>
+        <NotificationCenter
+          notifications={notifications}
+          alerts={priceAlerts}
+          onMarkRead={markNotificationRead}
+          onMarkAllRead={markAllNotificationsRead}
+          onCancelAlert={cancelPriceAlert}
+          onOpenSymbol={symbol => { void openSymbol(symbol); }}
+        />
         <button
           className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white/10 transition-colors flex-shrink-0"
           onClick={() => setTheme(t => t === "dark" ? "light" : "dark")}
@@ -4448,6 +4725,7 @@ export default function App() {
               onRangeChange={r => setDetailRange(selectedStock.symbol, r)}
               onBuy={shares => buyShares(selectedStock.symbol, shares, selectedStock.price)}
               onSell={shares => sellShares(selectedStock.symbol, shares, selectedStock.price)}
+              onSetAlert={() => setAlertDialog(selectedStock.symbol)}
               signedIn={signedIn}
               onSignIn={goSignIn}
             />
@@ -4541,6 +4819,8 @@ export default function App() {
                         onSelect={() => selectSymbol(stock.symbol)}
                         onToggleWatchlist={toggleWatchlist}
                         onTogglePin={togglePin}
+                        onTrade={(symbol, mode) => setTradeDialog({ symbol, mode })}
+                        onSetAlert={symbol => setAlertDialog(symbol)}
                       />
                     ))}
                   </div>
@@ -4593,6 +4873,7 @@ export default function App() {
                 onRangeChange={r => setDetailRange(selectedStock.symbol, r)}
                 onBuy={shares => buyShares(selectedStock.symbol, shares, selectedStock.price)}
                 onSell={shares => sellShares(selectedStock.symbol, shares, selectedStock.price)}
+                onSetAlert={() => setAlertDialog(selectedStock.symbol)}
                 signedIn={signedIn}
                 onSignIn={goSignIn}
               />
@@ -4679,6 +4960,20 @@ export default function App() {
             holding={holding}
             onClose={() => setTradeDialog(null)}
             onSell={shares => sellShares(stock.symbol, shares, stock.price)}
+          />
+        );
+      })()}
+
+      {alertDialog && (() => {
+        const stock = stocks.find(s => s.symbol === alertDialog);
+        if (!stock) return null;
+        return (
+          <SetAlertDialog
+            stock={stock}
+            holding={holdingMap.get(stock.symbol)}
+            balance={balance}
+            onClose={() => setAlertDialog(null)}
+            onSave={savePriceAlert}
           />
         );
       })()}
