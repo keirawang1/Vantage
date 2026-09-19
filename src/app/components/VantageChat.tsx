@@ -279,7 +279,10 @@ export function VantageChat({ context }: { context: ChatContext }) {
     ]);
     setBusy(true);
     try {
-      for await (const partial of streamChatReply(text, context)) {
+      const prior = messages
+        .filter(m => m.id !== "welcome" && m.text)
+        .map(m => ({ role: m.role, text: m.text }));
+      for await (const partial of streamChatReply(text, context, prior)) {
         setMessages(prev => prev.map(m => (m.id === botId ? { ...m, text: partial } : m)));
       }
     } catch (err) {
@@ -292,7 +295,7 @@ export function VantageChat({ context }: { context: ChatContext }) {
     } finally {
       setBusy(false);
     }
-  }, [busy, context]);
+  }, [busy, context, messages]);
 
   const clear = () => {
     resetChat();

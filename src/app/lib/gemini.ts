@@ -1,30 +1,5 @@
-import {
-  getAI,
-  getGenerativeModel,
-  GoogleAIBackend,
-  type ChatSession,
-} from "firebase/ai";
-import { app } from "./firebase";
+import { apiUrl } from "./stocks";
 import type { StockMeta } from "./stocks";
-
-const ai = getAI(app, { backend: new GoogleAIBackend() });
-
-const SYSTEM = `You are Vantage AI, a helpful investing assistant inside the Vantage stock app.
-You help users with:
-- Stock recommendations and ideas (with clear reasoning)
-- Pattern / technical / trend analysis based on data they share
-- Explaining markets, sectors, ETFs, and portfolio concepts
-- Answering questions about tickers they follow
-
-Rules:
-- Be concise and practical. Use short paragraphs or bullets when useful.
-- Format with simple markdown: **bold**, bullets, and short headings when helpful.
-- Always finish complete sentences and complete every bullet — never cut off mid-thought.
-- Always remind users this is not financial advice and markets involve risk.
-- Prefer tickers and facts grounded in the portfolio/market context provided.
-- If data is missing, say so and ask a clarifying question.
-- Do not invent precise live prices; use the provided snapshot when available.
-- Aim for clear answers; go longer when the user asks for depth.`;
 
 export interface ChatContext {
   signedIn: boolean;
@@ -33,130 +8,86 @@ export interface ChatContext {
   stocks: Pick<StockMeta, "symbol" | "name" | "sector" | "price" | "changePercent">[];
 }
 
-function contextBlock(ctx: ChatContext): string {
-  const lines: string[] = [
-    `User signed in: ${ctx.signedIn ? "yes" : "no"}`,
-    `Watchlist tickers: ${ctx.watchlistSymbols.slice(0, 40).join(", ") || "(none)"}`,
-  ];
-  if (ctx.holdings.length) {
-    lines.push(
-      "Holdings: " +
-        ctx.holdings
-          .slice(0, 20)
-          .map(h => `${h.symbol} ${h.shares}@$${h.avgCost.toFixed(2)}`)
-          .join("; ")
-    );
-  } else {
-    lines.push("Holdings: (none)");
-  }
-  if (ctx.stocks.length) {
-    lines.push(
-      "Market snapshot: " +
-        ctx.stocks
-          .slice(0, 25)
-          .map(s => {
-            const pct = Number.isFinite(s.changePercent)
-              ? `${s.changePercent >= 0 ? "+" : ""}${s.changePercent.toFixed(2)}%`
-              : "—";
-            return `${s.symbol} $${s.price.toFixed(2)} ${pct} (${s.sector})`;
-          })
-          .join("; ")
-    );
-  }
-  return lines.join("\n");
-}
-
-let chat: ChatSession | null = null;
-let chatContextKey = "";
-
-function ensureChat(ctx: ChatContext): ChatSession {
-  const key = JSON.stringify({
-    signedIn: ctx.signedIn,
-    watchlistSymbols: ctx.watchlistSymbols.slice(0, 40),
-    holdings: ctx.holdings.slice(0, 20),
-  });
-  if (chat && key === chatContextKey) return chat;
-
-  const model = getGenerativeModel(ai, {
-    model: "gemini-3.8-flash",
-    systemInstruction: SYSTEM,
-    generationConfig: {
-      maxOutputTokens: 4096,
-    },
-  });
-
-  chat = model.startChat({
-    history: [
-      {
-        role: "user",
-        parts: [{ text: `App context for this session:\n${contextBlock(ctx)}` }],
-      },
-      {
-        role: "model",
-        parts: [{
-          text: "Got it — I’ll use your watchlists, holdings, and market snapshot when helping. What would you like to explore?",
-        }],
-      },
-    ],
-  });
-  chatContextKey = key;
-  return chat;
+export interface ChatTurn {
+  role: "user" | "assistant";
+  text: string;
 }
 
 export function resetChat() {
-  chat = null;
-  chatContextKey = "";
+  // History lives in the chat UI; the API is stateless.
 }
 
 export function chatErrorMessage(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err ?? "");
   const lower = raw.toLowerCase();
-  if (lower.includes("404") || lower.includes("not found") || lower.includes("is not found")) {
-    return "That Gemini model isn’t available for this project. Try again in a moment.";
-  }
-  if (lower.includes("app check")) {
-    return "Gemini needs Firebase App Check enabled for this project.";
-  }
-  if (
-    lower.includes("permission") ||
-    lower.includes("403") ||
-    lower.includes("api key") ||
-    lower.includes("ai logic")
-  ) {
-    return "Gemini isn’t available yet. Enable Firebase AI Logic (Gemini Developer API) for this project.";
+  if (lower.includes("not configured") || lower.includes("gemini_api_key") || lower.includes("503")) {
+    return "Add a free Gemini key: aistudio.google.com/apikey → server env GEMINI_API_KEY (no billing / App Check).";
   }
   if (lower.includes("quota") || lower.includes("resource exhausted") || lower.includes("429")) {
     return "Gemini is rate-limited right now. Try again in a minute.";
   }
+  if (lower.includes("api key") || lower.includes("permission") || lower.includes("403")) {
+    return "That Gemini API key isn’t valid. Create a free one at aistudio.google.com/apikey.";
+  }
   return "Something went wrong. Try again in a moment.";
 }
+
 export async function* streamChatReply(
   message: string,
   ctx: ChatContext,
+  history: ChatTurn[] = [],
 ): AsyncGenerator<string> {
-  const session = ensureChat(ctx);
-  const prompt = `${message}\n\n(Latest app context)\n${contextBlock(ctx)}`;
-  const result = await session.sendMessageStream(prompt);
-  let full = "";
-  for await (const chunk of result.stream) {
-    const t = chunk.text();
-    if (t) {
-      full += t;
-      yield full;
+  const res = await fetch(apiUrl("/api/chat"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      message,
+      history: history.slice(-24).map(t => ({ role: t.role, text: t.text })),
+      context: {
+        signedIn: ctx.signedIn,
+        watchlistSymbols: ctx.watchlistSymbols.slice(0, 40),
+        holdings: ctx.holdings.slice(0, 20),
+        stocks: ctx.stocks.slice(0, 25),
+      },
+    }),
+  });
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const body = await res.json() as { detail?: unknown };
+      detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail ?? "");
+    } catch {
+      detail = await res.text().catch(() => "");
     }
+    throw new Error(detail || `Chat failed (${res.status})`);
   }
-  try {
-    const response = await result.response;
-    const final = response.text() || "";
-    if (final.length > full.length) {
-      full = final;
-      yield full;
-    } else if (!full && final) {
-      full = final;
-      yield full;
+  if (!res.body) throw new Error("Chat failed (empty stream)");
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let full = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const parts = buf.split("\n\n");
+    buf = parts.pop() ?? "";
+    for (const part of parts) {
+      const line = part.split("\n").find(l => l.startsWith("data: "));
+      if (!line) continue;
+      let payload: { t?: string; error?: string; done?: boolean };
+      try {
+        payload = JSON.parse(line.slice(6)) as { t?: string; error?: string; done?: boolean };
+      } catch {
+        continue;
+      }
+      if (payload.error) throw new Error(payload.error);
+      if (payload.t) {
+        full += payload.t;
+        yield full;
+      }
     }
-  } catch {
-    /* stream already consumed */
   }
   if (!full) yield "I couldn’t generate a reply. Try again.";
 }

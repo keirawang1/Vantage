@@ -9,11 +9,27 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yfinance as yf
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+
+def _load_dotenv() -> None:
+    p = Path(__file__).resolve().parent / ".env"
+    if not p.exists():
+        return
+    for raw in p.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
+
+
+_load_dotenv()
 
 app = FastAPI(title="Vantage yfinance API")
 _DEFAULT_CORS = (
@@ -39,7 +55,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_CORS_ORIGINS,
     allow_origin_regex=_CORS_ORIGIN_REGEX,
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -791,7 +807,141 @@ def proxy_image(u: str = Query(..., min_length=8, max_length=2000)):
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "source": "yfinance"}
+    return {
+        "ok": True,
+        "source": "yfinance",
+        "gemini": bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")),
+    }
+
+
+_CHAT_SYSTEM = """You are Vantage AI, a helpful investing assistant inside the Vantage stock app.
+You help users with:
+- Stock recommendations and ideas (with clear reasoning)
+- Pattern / technical / trend analysis based on data they share
+- Explaining markets, sectors, ETFs, and portfolio concepts
+- Answering questions about tickers they follow
+
+Rules:
+- Be concise and practical. Use short paragraphs or bullets when useful.
+- Format with simple markdown: **bold**, bullets, and short headings when helpful.
+- Always finish complete sentences and complete every bullet — never cut off mid-thought.
+- Always remind users this is not financial advice and markets involve risk.
+- Prefer tickers and facts grounded in the portfolio/market context provided.
+- If data is missing, say so and ask a clarifying question.
+- Do not invent precise live prices; use the provided snapshot when available.
+- Aim for clear answers; go longer when the user asks for depth."""
+
+
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    text: str = Field(min_length=1, max_length=12_000)
+
+
+class ChatContextIn(BaseModel):
+    signedIn: bool = False
+    watchlistSymbols: list[str] = Field(default_factory=list)
+    holdings: list[dict[str, Any]] = Field(default_factory=list)
+    stocks: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ChatIn(BaseModel):
+    message: str = Field(min_length=1, max_length=8000)
+    history: list[ChatTurn] = Field(default_factory=list)
+    context: ChatContextIn | None = None
+
+
+def _context_block(ctx: ChatContextIn | None) -> str:
+    if not ctx:
+        return ""
+    lines = [
+        f"User signed in: {'yes' if ctx.signedIn else 'no'}",
+        "Watchlist tickers: " + (", ".join(ctx.watchlistSymbols[:40]) or "(none)"),
+    ]
+    if ctx.holdings:
+        bits = []
+        for h in ctx.holdings[:20]:
+            try:
+                bits.append(f"{h['symbol']} {h['shares']}@${float(h['avgCost']):.2f}")
+            except (KeyError, TypeError, ValueError):
+                continue
+        lines.append("Holdings: " + ("; ".join(bits) or "(none)"))
+    else:
+        lines.append("Holdings: (none)")
+    if ctx.stocks:
+        bits = []
+        for s in ctx.stocks[:25]:
+            try:
+                pct = float(s.get("changePercent") or 0)
+                sign = "+" if pct >= 0 else ""
+                bits.append(
+                    f"{s['symbol']} ${float(s.get('price') or 0):.2f} {sign}{pct:.2f}% ({s.get('sector') or '—'})"
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        if bits:
+            lines.append("Market snapshot: " + "; ".join(bits))
+    return "\n".join(lines)
+
+
+def _gemini_client():
+    key = (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or "").strip()
+    if not key:
+        return None
+    from google import genai
+    return genai.Client(api_key=key)
+
+
+@app.post("/api/chat")
+def chat(body: ChatIn):
+    client = _gemini_client()
+    if client is None:
+        raise HTTPException(
+            503,
+            "Gemini isn’t configured. Add a free GEMINI_API_KEY from https://aistudio.google.com/apikey",
+        )
+
+    from google.genai import types
+
+    ctx = _context_block(body.context)
+    user_text = body.message.strip()
+    if ctx:
+        user_text = f"{user_text}\n\n(Latest app context)\n{ctx}"
+
+    contents: list[types.Content] = []
+    for turn in body.history[-24:]:
+        role = "user" if turn.role == "user" else "model"
+        contents.append(types.Content(role=role, parts=[types.Part(text=turn.text[:8000])]))
+    contents.append(types.Content(role="user", parts=[types.Part(text=user_text)]))
+
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+
+    def stream():
+        try:
+            chunks = client.models.generate_content_stream(
+                model=model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=_CHAT_SYSTEM,
+                    max_output_tokens=4096,
+                ),
+            )
+            for chunk in chunks:
+                try:
+                    text = chunk.text or ""
+                except Exception:
+                    text = ""
+                if text:
+                    yield f"data: {json.dumps({'t': text})}\n\n"
+            yield "data: {\"done\": true}\n\n"
+        except Exception as err:
+            msg = str(err)[:500] or "Gemini request failed"
+            yield f"data: {json.dumps({'error': msg})}\n\n"
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 if __name__ == "__main__":

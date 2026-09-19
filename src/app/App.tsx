@@ -3913,9 +3913,19 @@ function AccountPage({
 
 // ─── App ───────────────────────────────────────────────────────────────────────
 
+const THEME_KEY = "vantage-theme";
+
+function loadLocalTheme(): "dark" | "light" {
+  try {
+    return localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark";
+  } catch {
+    return "dark";
+  }
+}
+
 export default function App() {
   const [page,            setPage]           = useState<AppPage>("home");
-  const [theme,           setTheme]          = useState<"dark" | "light">("dark");
+  const [theme,           setTheme]          = useState<"dark" | "light">(loadLocalTheme);
   const [homeRange,       setHomeRange]      = useState<TimeRange>("1D");
   const [detailRanges,    setDetailRanges]   = useState<Record<string, TimeRange>>({});
   const [filter,          setFilter]         = useState<FilterMode>("all");
@@ -3954,6 +3964,8 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
+    document.documentElement.style.colorScheme = theme;
+    try { localStorage.setItem(THEME_KEY, theme); } catch { /* ignore */ }
   }, [theme]);
 
   useEffect(() => {
@@ -4212,6 +4224,7 @@ export default function App() {
       watchlists: lists,
       prefs: {
         ...DEFAULT_PREFS,
+        theme,
         activeWatchlist: "portfolio",
       },
       priceAlerts: [],
@@ -4221,7 +4234,7 @@ export default function App() {
       .then(live => setStocks([...live]))
       .catch(() => {});
     setPage("home");
-  }, [user, profile, clearTradeData]);
+  }, [user, profile, theme, clearTradeData]);
 
   const handleSignOut = useCallback(async () => {
     await signOut();
