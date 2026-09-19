@@ -4425,11 +4425,6 @@ export default function App() {
     setSearch("");
     setSelectedSymbol(symbol);
     setPage("home");
-    // Ensure searchable tickers land in All Stocks so they stay available
-    setWatchlists(prev => prev.map(w => {
-      if (w.id !== "portfolio" || w.symbols.includes(symbol)) return w;
-      return { ...w, symbols: [...w.symbols, symbol] };
-    }));
     try {
       const live = await ensureQuotes([symbol]);
       setStocks([...live]);

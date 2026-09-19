@@ -5,7 +5,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { MessageCircle, Send, X, Sparkles, Trash2 } from "lucide-react";
-import { resetChat, streamChatReply, type ChatContext } from "../lib/gemini";
+import { resetChat, streamChatReply, chatErrorMessage, type ChatContext } from "../lib/gemini";
 
 const G = "#34d399";
 const R = "#f87171";
@@ -283,10 +283,7 @@ export function VantageChat({ context }: { context: ChatContext }) {
         setMessages(prev => prev.map(m => (m.id === botId ? { ...m, text: partial } : m)));
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Chat failed";
-      setError(msg.includes("API") || msg.includes("permission") || msg.includes("PERMISSION")
-        ? "Gemini isn’t available yet. Check Firebase AI Logic is enabled for this project."
-        : "Something went wrong. Try again in a moment.");
+      setError(chatErrorMessage(err));
       setMessages(prev => prev.map(m => (
         m.id === botId && !m.text
           ? { ...m, text: "I couldn’t complete that reply." }

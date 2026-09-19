@@ -78,12 +78,9 @@ function ensureChat(ctx: ChatContext): ChatSession {
   if (chat && key === chatContextKey) return chat;
 
   const model = getGenerativeModel(ai, {
-    model: "gemini-flash-latest",
+    model: "gemini-3.8-flash",
     systemInstruction: SYSTEM,
     generationConfig: {
-      temperature: 0.7,
-      topP: 0.95,
-      topK: 40,
       maxOutputTokens: 4096,
     },
   });
@@ -111,7 +108,28 @@ export function resetChat() {
   chatContextKey = "";
 }
 
-/** Stream a reply; yields incremental full text so far. */
+export function chatErrorMessage(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err ?? "");
+  const lower = raw.toLowerCase();
+  if (lower.includes("404") || lower.includes("not found") || lower.includes("is not found")) {
+    return "That Gemini model isn’t available for this project. Try again in a moment.";
+  }
+  if (lower.includes("app check")) {
+    return "Gemini needs Firebase App Check enabled for this project.";
+  }
+  if (
+    lower.includes("permission") ||
+    lower.includes("403") ||
+    lower.includes("api key") ||
+    lower.includes("ai logic")
+  ) {
+    return "Gemini isn’t available yet. Enable Firebase AI Logic (Gemini Developer API) for this project.";
+  }
+  if (lower.includes("quota") || lower.includes("resource exhausted") || lower.includes("429")) {
+    return "Gemini is rate-limited right now. Try again in a minute.";
+  }
+  return "Something went wrong. Try again in a moment.";
+}
 export async function* streamChatReply(
   message: string,
   ctx: ChatContext,
