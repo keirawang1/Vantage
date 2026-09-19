@@ -264,7 +264,7 @@ function TextSkeleton({
 }
 
 /** Animated chart wave loader */
-function ChartSkeleton({ height = 260, className = "" }: { height?: number; className?: string }) {
+function ChartSkeleton({ height = 260, className = "" }: { height?: number | string; className?: string }) {
   const uid = useId();
   const fillId = `chart-skel-fill-${uid}`;
   return (
@@ -352,7 +352,7 @@ const NAV_ITEMS: { id: AppPage; label: string }[] = [
 // ─── MiniSparkline ─────────────────────────────────────────────────────────────
 
 function MiniSparkline({ symbol, range, isGain, height = 52, lastPrice, refreshKey = 0 }: {
-  symbol: string; range: TimeRange; isGain: boolean; height?: number; lastPrice?: number; refreshKey?: number;
+  symbol: string; range: TimeRange; isGain: boolean; height?: number | string; lastPrice?: number; refreshKey?: number;
 }) {
   const [data, setData] = useState(() => getHistory(symbol, range, lastPrice, { resolution: "spark" }));
   const [loading, setLoading] = useState(() => getHistory(symbol, range, lastPrice, { resolution: "spark" }).length < 2);
@@ -380,11 +380,12 @@ function MiniSparkline({ symbol, range, isGain, height = 52, lastPrice, refreshK
   }, [symbol, range, lastPrice, refreshKey]);
 
   if (loading || chartData.length < 2) {
-    return <ChartSkeleton height={height} className="rounded-md" />;
+    return <ChartSkeleton height={height} className="rounded-md w-full" />;
   }
 
   return (
-    <ResponsiveContainer width="100%" height={height}>
+    <div className="w-full min-h-0" style={{ height }}>
+    <ResponsiveContainer width="100%" height="100%">
       <AreaChart data={chartData} margin={{ top: 2, right: 0, bottom: 2, left: 0 }}>
         <defs>
           <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
@@ -402,6 +403,7 @@ function MiniSparkline({ symbol, range, isGain, height = 52, lastPrice, refreshK
         />
       </AreaChart>
     </ResponsiveContainer>
+    </div>
   );
 }
 
@@ -865,7 +867,7 @@ function StockCard({
 
   return (
     <div
-      className="group relative flex flex-col gap-3 p-4 rounded-2xl border transition-all duration-150"
+      className="group relative flex flex-col gap-2 sm:gap-3 p-3 sm:p-4 rounded-2xl border transition-all duration-150"
       style={{
         background:   "var(--v-panel)",
         borderColor:  isDragOver ? "var(--v-ink-soft)" : isPinned ? "rgba(52,211,153,0.35)" : "var(--v-line)",
@@ -985,17 +987,17 @@ function StockCard({
 
 /** Shared column layout so header labels + row cells stay aligned */
 const LR = {
-  pad: "px-4",
-  symbol: "w-44 sm:w-52 flex-shrink-0 overflow-hidden text-left",
-  chart:  "w-36 sm:w-44 flex-shrink-0 min-w-0 text-left",
-  price:  "w-[4.75rem] flex-shrink-0 text-left tabular-nums",
-  change: "w-[4.5rem] flex-shrink-0 text-left",
+  pad: "px-2.5 md:px-4",
+  symbol: "min-w-0 flex-1 overflow-hidden text-left md:flex-none md:w-44 lg:w-52 md:flex-shrink-0",
+  chart:  "w-[5.25rem] md:w-36 lg:w-44 flex-shrink-0 min-w-0 text-left",
+  price:  "flex-shrink-0 tabular-nums text-right md:text-left md:w-[4.75rem]",
+  change: "flex-shrink-0 text-right md:text-left md:w-[4.5rem]",
   volume: "w-[4.25rem] flex-shrink-0 text-left tabular-nums",
   cap:    "w-[4.25rem] flex-shrink-0 text-left tabular-nums",
   open:   "w-[4.25rem] flex-shrink-0 text-left tabular-nums",
   high:   "w-[4.25rem] flex-shrink-0 text-left tabular-nums",
   low:    "w-[4.25rem] flex-shrink-0 text-left tabular-nums",
-  menu:   "w-6 flex-shrink-0",
+  menu:   "w-6 flex-shrink-0 hidden md:block",
 } as const;
 
 function ListCols(props: {
@@ -1011,23 +1013,23 @@ function ListCols(props: {
 }) {
   const { symbol, chart, price, change, volume, cap, open, high, low } = props;
   return (
-    <div className="flex items-center flex-1 min-w-[44rem]">
+    <div className="flex items-center gap-1.5 md:gap-0 flex-1 min-w-0 w-full md:min-w-[44rem]">
       <div className={LR.symbol}>{symbol}</div>
 
-      <div className="w-6 sm:w-10 flex-shrink-0" aria-hidden />
+      <div className="hidden md:block w-6 lg:w-10 flex-shrink-0" aria-hidden />
 
       <div className={LR.chart}>{chart}</div>
 
-      <div className="w-8 sm:w-12 flex-shrink-0" aria-hidden />
+      <div className="hidden md:block w-8 lg:w-12 flex-shrink-0" aria-hidden />
 
-      <div className="flex items-center gap-3 flex-shrink-0">
+      <div className="flex flex-col items-end justify-center gap-0.5 flex-shrink-0 ml-auto md:ml-0 md:flex-row md:items-center md:gap-3">
         <div className={LR.price}>{price}</div>
         <div className={LR.change}>{change}</div>
       </div>
 
-      <div className="w-4 sm:w-6 flex-shrink-0" aria-hidden />
+      <div className="hidden md:block w-4 lg:w-6 flex-shrink-0" aria-hidden />
 
-      <div className="flex items-center gap-3 flex-shrink-0">
+      <div className="hidden md:flex items-center gap-3 flex-shrink-0">
         <div className={LR.volume}>{volume}</div>
         <div className={LR.cap}>{cap}</div>
         <div className={LR.open}>{open}</div>
@@ -1074,7 +1076,7 @@ function ListHeader({
 
   return (
     <div
-      className={`flex items-center gap-3 ${LR.pad} pb-1.5 mb-1 text-[9px] font-mono uppercase tracking-widest min-w-[44rem]`}
+      className={`hidden md:flex items-center gap-3 ${LR.pad} pb-1.5 mb-1 text-[9px] font-mono uppercase tracking-widest md:min-w-[44rem]`}
       style={{ color: "var(--v-ink-dim)" }}
     >
       <ListCols
@@ -1115,7 +1117,7 @@ function StockRow({
 
   return (
     <div
-      className={`group flex items-center gap-3 ${LR.pad} py-3 rounded-xl border transition-all duration-150 min-w-[44rem]`}
+      className={`group flex items-center gap-1.5 md:gap-3 ${LR.pad} py-2 md:py-3 rounded-xl border transition-all duration-150 min-w-0 w-full md:min-w-[44rem]`}
       style={{
         background:  "var(--v-panel)",
         borderColor: isDragOver ? "var(--v-ink-soft)" : isPinned ? "rgba(52,211,153,0.35)" : "var(--v-line)",
@@ -1133,16 +1135,20 @@ function StockRow({
       <ListCols
         symbol={(
           <>
-            <div className="font-mono text-[13px] font-semibold tracking-wider flex items-center gap-1.5 truncate" style={{ color: "var(--v-ink)" }}>
+            <div className="font-mono text-[12px] sm:text-[13px] font-semibold tracking-wider flex items-center gap-1.5 truncate" style={{ color: "var(--v-ink)" }}>
               {stock.symbol}
               {isPinned && <Star size={8} fill={G} style={{ color: G, flexShrink: 0 }} />}
             </div>
-            <div className="text-[11px] truncate" style={{ color: "var(--v-ink-dim)" }}>{stock.name}</div>
+            <div className="text-[10px] sm:text-[11px] truncate" style={{ color: "var(--v-ink-dim)" }}>{stock.name}</div>
           </>
         )}
-        chart={<MiniSparkline symbol={stock.symbol} range={range} isGain={isGain} height={44} lastPrice={stock.price > 0 ? stock.price : undefined} refreshKey={refreshKey} />}
+        chart={(
+          <div className="h-7 md:h-11 w-full">
+            <MiniSparkline symbol={stock.symbol} range={range} isGain={isGain} height="100%" lastPrice={stock.price > 0 ? stock.price : undefined} refreshKey={refreshKey} />
+          </div>
+        )}
         price={stock.price > 0 ? (
-          <span className="font-mono text-[14px] font-semibold truncate" style={{ color: "var(--v-ink)" }}>
+          <span className="font-mono text-[13px] sm:text-[14px] font-semibold truncate leading-tight" style={{ color: "var(--v-ink)" }}>
             {fmt$(stock.price)}
           </span>
         ) : (
@@ -1150,7 +1156,7 @@ function StockRow({
         )}
         change={stock.price > 0 && !delta.loading ? (
           <span
-            className="flex w-fit items-center text-[11px] font-mono font-medium px-1.5 py-0.5 rounded-md truncate max-w-full"
+            className="inline-flex justify-center items-center min-w-[3.25rem] text-[10px] sm:text-[11px] font-mono font-medium px-1.5 py-0.5 rounded-md truncate max-w-full"
             style={{ color: isGain ? G : R, background: isGain ? "rgba(52,211,153,0.1)" : "rgba(248,113,130,0.1)" }}
           >
             {changeDisplay === "amount" ? fmtChangeAmt(delta.change) : fmtPct(delta.changePercent)}
@@ -1221,19 +1227,21 @@ function StockRow({
 // ─── Holding list (portfolio) ──────────────────────────────────────────────────
 
 const HR = {
-  pad: "px-4",
-  symbol: "w-44 sm:w-52 flex-shrink-0 overflow-hidden text-left",
-  price:  "w-[4.75rem] flex-shrink-0 text-left tabular-nums",
-  change: "w-[4.5rem] flex-shrink-0 text-left",
+  pad: "px-2.5 md:px-4",
+  symbol: "min-w-0 flex-1 overflow-hidden text-left md:flex-none md:w-44 lg:w-52 md:flex-shrink-0",
+  chart:  "w-[5.25rem] flex-shrink-0 min-w-0 md:hidden",
+  price:  "flex-shrink-0 tabular-nums text-right md:text-left md:w-[4.75rem]",
+  change: "flex-shrink-0 text-right md:text-left md:w-[4.5rem]",
   shares: "w-[4.5rem] flex-shrink-0 text-left tabular-nums",
   avg:    "w-[4.75rem] flex-shrink-0 text-left tabular-nums",
   profit: "w-[5rem] flex-shrink-0 text-left tabular-nums",
   value:  "w-[5rem] flex-shrink-0 text-left tabular-nums",
-  menu:   "w-6 flex-shrink-0",
+  menu:   "w-6 flex-shrink-0 hidden md:block",
 } as const;
 
 function HoldingCols(props: {
   symbol: React.ReactNode;
+  chart?: React.ReactNode;
   price: React.ReactNode;
   change: React.ReactNode;
   shares: React.ReactNode;
@@ -1241,23 +1249,24 @@ function HoldingCols(props: {
   profit: React.ReactNode;
   value: React.ReactNode;
 }) {
-  const { symbol, price, change, shares, avg, profit, value } = props;
+  const { symbol, chart, price, change, shares, avg, profit, value } = props;
   return (
-    <div className="flex items-center flex-1 min-w-[42rem]">
+    <div className="flex items-center gap-1.5 md:gap-0 flex-1 min-w-0 w-full md:min-w-[42rem]">
       <div className={HR.symbol}>{symbol}</div>
-      <div className="w-6 sm:w-10 flex-shrink-0" aria-hidden />
-      <div className="flex items-center gap-3 flex-shrink-0">
+      {chart != null && <div className={HR.chart}>{chart}</div>}
+      <div className="hidden md:block w-6 lg:w-10 flex-shrink-0" aria-hidden />
+      <div className="flex flex-col items-end justify-center gap-0.5 flex-shrink-0 ml-auto md:ml-0 md:flex-row md:items-center md:gap-3">
         <div className={HR.price}>{price}</div>
         <div className={HR.change}>{change}</div>
       </div>
-      <div className="w-5 sm:w-8 flex-shrink-0" aria-hidden />
-      <div className="flex items-center gap-5 flex-shrink-0">
+      <div className="hidden md:block w-5 lg:w-8 flex-shrink-0" aria-hidden />
+      <div className="hidden md:flex items-center gap-5 flex-shrink-0">
         <div className={HR.shares}>{shares}</div>
         <div className={HR.avg}>{avg}</div>
         <div className={HR.profit}>{profit}</div>
         <div className={HR.value}>{value}</div>
       </div>
-      <div className="flex-1 min-w-[0.5rem]" aria-hidden />
+      <div className="hidden md:block flex-1 min-w-[0.5rem]" aria-hidden />
     </div>
   );
 }
@@ -1293,7 +1302,7 @@ function HoldingListHeader({
 
   return (
     <div
-      className={`flex items-center gap-3 ${HR.pad} pb-1.5 mb-1 text-[9px] font-mono uppercase tracking-widest min-w-[42rem]`}
+      className={`hidden md:flex items-center gap-3 ${HR.pad} pb-1.5 mb-1 text-[9px] font-mono uppercase tracking-widest md:min-w-[42rem]`}
       style={{ color: "var(--v-ink-dim)" }}
     >
       <HoldingCols
@@ -1337,7 +1346,7 @@ function HoldingRow({
 
   return (
     <div
-      className={`group flex items-center gap-3 ${HR.pad} py-3 rounded-xl border transition-all duration-150 min-w-[42rem]`}
+      className={`group flex items-center gap-1.5 md:gap-3 ${HR.pad} py-2 md:py-3 rounded-xl border transition-all duration-150 min-w-0 w-full md:min-w-[42rem]`}
       style={{
         background:  "var(--v-panel)",
         borderColor: isPinned ? "rgba(52,211,153,0.35)" : "var(--v-line)",
@@ -1350,15 +1359,20 @@ function HoldingRow({
       <HoldingCols
         symbol={(
           <>
-            <div className="font-mono text-[13px] font-semibold tracking-wider flex items-center gap-1.5 truncate" style={{ color: "var(--v-ink)" }}>
+            <div className="font-mono text-[12px] sm:text-[13px] font-semibold tracking-wider flex items-center gap-1.5 truncate" style={{ color: "var(--v-ink)" }}>
               {stock.symbol}
               {isPinned && <Star size={8} fill={G} style={{ color: G, flexShrink: 0 }} />}
             </div>
-            <div className="text-[11px] truncate" style={{ color: "var(--v-ink-dim)" }}>{stock.name}</div>
+            <div className="text-[10px] sm:text-[11px] truncate" style={{ color: "var(--v-ink-dim)" }}>{stock.name}</div>
           </>
         )}
+        chart={(
+          <div className="h-7 w-full">
+            <MiniSparkline symbol={stock.symbol} range={range} isGain={isGain} height="100%" lastPrice={stock.price > 0 ? stock.price : undefined} refreshKey={refreshKey} />
+          </div>
+        )}
         price={stock.price > 0 ? (
-          <span className="font-mono text-[14px] font-semibold truncate" style={{ color: "var(--v-ink)" }}>
+          <span className="font-mono text-[13px] sm:text-[14px] font-semibold truncate leading-tight" style={{ color: "var(--v-ink)" }}>
             {fmt$(stock.price)}
           </span>
         ) : (
@@ -1366,7 +1380,7 @@ function HoldingRow({
         )}
         change={stock.price > 0 && !delta.loading ? (
           <span
-            className="flex w-fit items-center text-[11px] font-mono font-medium px-1.5 py-0.5 rounded-md truncate max-w-full"
+            className="inline-flex justify-center items-center min-w-[3.25rem] text-[10px] sm:text-[11px] font-mono font-medium px-1.5 py-0.5 rounded-md truncate max-w-full"
             style={{ color: isGain ? G : R, background: isGain ? "rgba(52,211,153,0.1)" : "rgba(248,113,130,0.1)" }}
           >
             {changeDisplay === "amount" ? fmtChangeAmt(delta.change) : fmtPct(delta.changePercent)}
@@ -3915,12 +3929,25 @@ function AccountPage({
 
 const THEME_KEY = "vantage-theme";
 
-function loadLocalTheme(): "dark" | "light" {
+function readStoredTheme(): "dark" | "light" | null {
   try {
-    return localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark";
+    const t = localStorage.getItem(THEME_KEY);
+    return t === "light" || t === "dark" ? t : null;
   } catch {
-    return "dark";
+    return null;
   }
+}
+
+function applyThemeClass(theme: "dark" | "light") {
+  const root = document.documentElement;
+  root.classList.toggle("dark", theme === "dark");
+  root.style.colorScheme = theme;
+}
+
+function loadLocalTheme(): "dark" | "light" {
+  const t = readStoredTheme() ?? "dark";
+  if (typeof document !== "undefined") applyThemeClass(t);
+  return t;
 }
 
 export default function App() {
@@ -3962,9 +3989,8 @@ export default function App() {
   const dragSymbolRef = useRef<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
 
-  useEffect(() => {
-    document.documentElement.classList.toggle("dark", theme === "dark");
-    document.documentElement.style.colorScheme = theme;
+  useLayoutEffect(() => {
+    applyThemeClass(theme);
     try { localStorage.setItem(THEME_KEY, theme); } catch { /* ignore */ }
   }, [theme]);
 
@@ -4079,7 +4105,8 @@ export default function App() {
     setSortDir(prefs.sortDir as SortDir);
     setChangeDisplay(prefs.changeDisplay as ChangeDisplay);
     setViewMode(prefs.viewMode as ViewMode);
-    setTheme(prefs.theme === "light" ? "light" : "dark");
+    const storedTheme = readStoredTheme();
+    setTheme(storedTheme ?? (prefs.theme === "light" ? "light" : "dark"));
     setPinnedSymbols(prefs.pinnedSymbols);
     setCustomOrders(prefs.customOrders);
     const ranges: Record<string, TimeRange> = {};
@@ -4684,7 +4711,14 @@ export default function App() {
         />
         <button
           className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white/10 transition-colors flex-shrink-0"
-          onClick={() => setTheme(t => t === "dark" ? "light" : "dark")}
+          onClick={() => {
+            setTheme(t => {
+              const next = t === "dark" ? "light" : "dark";
+              applyThemeClass(next);
+              try { localStorage.setItem(THEME_KEY, next); } catch { /* ignore */ }
+              return next;
+            });
+          }}
         >
           {theme === "dark"
             ? <Sun  size={15} style={{ color: "var(--v-ink-soft)" }} />
@@ -4739,7 +4773,7 @@ export default function App() {
             />
           ) : (
             <div
-              className="flex-1 overflow-auto p-4"
+              className="flex-1 overflow-auto p-2 sm:p-4"
               style={{ scrollbarWidth: "thin", scrollbarColor: "var(--v-line-strong) transparent" }}
             >
               {!signedIn && (
@@ -4800,13 +4834,13 @@ export default function App() {
                   <span>No shares owned yet</span>
                 </div>
               ) : viewMode === "grid" ? (
-                <div className="grid gap-3 grid-cols-[repeat(2,minmax(10.5rem,1fr))] lg:grid-cols-[repeat(3,minmax(11rem,1fr))] xl:grid-cols-[repeat(4,minmax(11rem,1fr))] 2xl:grid-cols-[repeat(5,minmax(11rem,1fr))]">
+                <div className="grid gap-2 sm:gap-3 grid-cols-2 sm:grid-cols-[repeat(2,minmax(0,1fr))] lg:grid-cols-[repeat(3,minmax(11rem,1fr))] xl:grid-cols-[repeat(4,minmax(11rem,1fr))] 2xl:grid-cols-[repeat(5,minmax(11rem,1fr))]">
                   {portfolioStocks.map(({ stock, holding }) => (
                     <StockCard key={stock.symbol} {...sharedCardProps(stock, holding)} />
                   ))}
                 </div>
               ) : (
-                <div className="min-w-max">
+                <div className="w-full min-w-0 md:min-w-max">
                   <HoldingListHeader
                     sort={sort}
                     sortDir={sortDir}
@@ -4903,7 +4937,7 @@ export default function App() {
                 />
 
                 <div
-                  className="flex-1 overflow-auto p-4"
+                  className="flex-1 overflow-auto p-2 sm:p-4"
                   style={{ scrollbarWidth: "thin", scrollbarColor: "var(--v-line-strong) transparent" }}
                   onDragOver={e => e.preventDefault()}
                 >
@@ -4913,13 +4947,13 @@ export default function App() {
                       <span>No stocks match your filters</span>
                     </div>
                   ) : viewMode === "grid" ? (
-                    <div className="grid gap-3 grid-cols-[repeat(2,minmax(10.5rem,1fr))] lg:grid-cols-[repeat(3,minmax(11rem,1fr))] xl:grid-cols-[repeat(4,minmax(11rem,1fr))] 2xl:grid-cols-[repeat(5,minmax(11rem,1fr))]">
+                    <div className="grid gap-2 sm:gap-3 grid-cols-2 sm:grid-cols-[repeat(2,minmax(0,1fr))] lg:grid-cols-[repeat(3,minmax(11rem,1fr))] xl:grid-cols-[repeat(4,minmax(11rem,1fr))] 2xl:grid-cols-[repeat(5,minmax(11rem,1fr))]">
                       {visibleStocks.map(stock => (
                         <StockCard key={stock.symbol} {...sharedCardProps(stock)} />
                       ))}
                     </div>
                   ) : (
-                    <div className="min-w-max">
+                    <div className="w-full min-w-0 md:min-w-max">
                       <ListHeader
                         sort={sort}
                         sortDir={sortDir}

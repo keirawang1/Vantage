@@ -18,3 +18,5 @@ services:
         value: "https://(vantage|vantage-g2jl)(-[a-z0-9-]+)*\\.vercel\\.app"
       - key: GEMINI_API_KEY
         sync: false
+      - key: GEMINI_MODEL
+        value: gemini-3.6-flash

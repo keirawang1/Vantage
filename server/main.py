@@ -891,6 +891,25 @@ def _gemini_client():
     return genai.Client(api_key=key)
 
 
+_CHAT_MODELS = (
+    "gemini-3.6-flash",
+    "gemini-3.8-flash",
+    "gemini-2.0-flash",
+    "gemini-2.5-flash",
+)
+
+
+def _chat_models() -> list[str]:
+    preferred = (os.environ.get("GEMINI_MODEL") or "").strip()
+    out: list[str] = []
+    if preferred:
+        out.append(preferred)
+    for name in _CHAT_MODELS:
+        if name not in out:
+            out.append(name)
+    return out
+
+
 @app.post("/api/chat")
 def chat(body: ChatIn):
     client = _gemini_client()
@@ -913,29 +932,37 @@ def chat(body: ChatIn):
         contents.append(types.Content(role=role, parts=[types.Part(text=turn.text[:8000])]))
     contents.append(types.Content(role="user", parts=[types.Part(text=user_text)]))
 
-    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+    config = types.GenerateContentConfig(
+        system_instruction=_CHAT_SYSTEM,
+        max_output_tokens=4096,
+    )
 
     def stream():
-        try:
-            chunks = client.models.generate_content_stream(
-                model=model,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=_CHAT_SYSTEM,
-                    max_output_tokens=4096,
-                ),
-            )
-            for chunk in chunks:
-                try:
-                    text = chunk.text or ""
-                except Exception:
-                    text = ""
-                if text:
-                    yield f"data: {json.dumps({'t': text})}\n\n"
-            yield "data: {\"done\": true}\n\n"
-        except Exception as err:
-            msg = str(err)[:500] or "Gemini request failed"
-            yield f"data: {json.dumps({'error': msg})}\n\n"
+        last_err = "Gemini request failed"
+        for model in _chat_models():
+            try:
+                chunks = client.models.generate_content_stream(
+                    model=model,
+                    contents=contents,
+                    config=config,
+                )
+                for chunk in chunks:
+                    try:
+                        text = chunk.text or ""
+                    except Exception:
+                        text = ""
+                    if text:
+                        yield f"data: {json.dumps({'t': text})}\n\n"
+                yield "data: {\"done\": true}\n\n"
+                return
+            except Exception as err:
+                last_err = str(err)[:500] or "Gemini request failed"
+                low = last_err.lower()
+                if "404" in last_err or "not_found" in low or "no longer available" in low:
+                    continue
+                yield f"data: {json.dumps({'error': last_err})}\n\n"
+                return
+        yield f"data: {json.dumps({'error': last_err})}\n\n"
 
     return StreamingResponse(
         stream(),
